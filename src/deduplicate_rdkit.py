@@ -24,6 +24,9 @@ def read_sdf(paths: list[Path]) -> list[tuple[str, int, Chem.Mol]]:
 
 
 def full_match_to_template(template: Chem.Mol, mol: Chem.Mol) -> tuple[int, ...]:
+    # This graph match is the key difference from XYZ-only matching. It fails
+    # deliberately if the molecule is not the same chemical graph as the first
+    # SDF molecule.
     if template.GetNumAtoms() != mol.GetNumAtoms():
         raise ValueError("atom count differs from first molecule")
     match = mol.GetSubstructMatch(template)
@@ -34,6 +37,8 @@ def full_match_to_template(template: Chem.Mol, mol: Chem.Mol) -> tuple[int, ...]
 
 def renumber_to_template(template: Chem.Mol, mol: Chem.Mol) -> Chem.Mol:
     match = full_match_to_template(template, mol)
+    # match maps template atom index -> mol atom index. RenumberAtoms with this
+    # list rewrites mol so atom i follows the template/reference order.
     return Chem.RenumberAtoms(mol, list(match))
 
 
@@ -69,6 +74,8 @@ def main() -> int:
         best_unique_idx = -1
         best_rmsd = float("inf")
         for unique_idx, (_, _, _, representative) in enumerate(unique):
+            # GetBestRMS is symmetry-aware and more chemically robust than the
+            # fixed-order C++ RMSD, but it is expected to be slower.
             rmsd = rdMolAlign.GetBestRMS(aligned_mol, representative)
             if rmsd < best_rmsd:
                 best_rmsd = rmsd
@@ -86,6 +93,8 @@ def main() -> int:
         writer = Chem.SDWriter(str(args.write_unique))
         for unique_index, (input_index, path, mol_index, mol) in enumerate(unique):
             out = Chem.Mol(mol)
+            # Keep source metadata in the output SDF so a reduced conformer set
+            # can be traced back to the input file and molecule index.
             out.SetProp("_Name", mol_name(out, f"unique_{unique_index + 1:04d}"))
             out.SetIntProp("source_input_index", input_index)
             out.SetProp("source_path", path)

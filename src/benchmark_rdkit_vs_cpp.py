@@ -24,6 +24,8 @@ def write_xyz(mol: Chem.Mol, path: Path) -> None:
 
 
 def transformed_copy(mol: Chem.Mol) -> Chem.Mol:
+    # Apply only a rigid transform. If this benchmark reports nonzero RMSD, the
+    # transform or atom ordering changed internal geometry by mistake.
     out = Chem.Mol(mol)
     conf = out.GetConformer()
     angle = math.radians(37.0)
@@ -74,6 +76,8 @@ def main() -> int:
     )
     cpp_avg_us = parse_avg_microseconds(cpp.stdout)
 
+    # RDKit does graph/symmetry work in GetBestRMS, so this benchmark measures
+    # fixed-order RMSD speed versus a more general chemistry-aware operation.
     start = time.perf_counter()
     rmsd = 0.0
     for _ in range(args.repeat):

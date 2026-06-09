@@ -139,6 +139,9 @@ static double norm_squared_sum(const std::vector<Vec3>& coords) {
 }
 
 static double covalent_radius(const std::string& symbol) {
+    // Covalent radii are only used to infer a rough graph from XYZ.
+    // If --allow-reorder misses expected duplicates, --bond-scale and this table
+    // are the first places to inspect.
     if (symbol == "H") return 0.31;
     if (symbol == "B") return 0.84;
     if (symbol == "C") return 0.76;
@@ -170,6 +173,8 @@ static double distance(const Vec3& a, const Vec3& b) {
 }
 
 static MolecularGraph infer_graph(const Molecule& mol, double bond_scale) {
+    // XYZ has no bond table, so this builds a debugging-friendly approximation:
+    // distance <= bond_scale * (r_cov_a + r_cov_b) means bonded.
     const std::size_t n = mol.coords.size();
     MolecularGraph graph;
     graph.bonded.assign(n, std::vector<bool>(n, false));
@@ -194,6 +199,9 @@ static MolecularGraph infer_graph(const Molecule& mol, double bond_scale) {
         }
         std::sort(neighbor_symbols.begin(), neighbor_symbols.end());
 
+        // The signature narrows atom mapping candidates before recursion.
+        // It intentionally stays local and simple; RDKit mode is preferred when
+        // bond order, aromaticity, charge, or stereochemistry matters.
         std::ostringstream signature;
         signature << mol.symbols[i] << "|degree=" << neighbor_symbols.size() << "|neighbors=";
         for (const std::string& neighbor : neighbor_symbols) {
@@ -256,6 +264,8 @@ static double aligned_rmsd(const Molecule& a, const Molecule& b) {
         return 0.0;
     }
 
+    // Horn quaternion RMSD after removing translation. This assumes atom i in
+    // both Molecule objects is already the intended mapping.
     const std::vector<Vec3> p = centered(a.coords);
     const std::vector<Vec3> q = centered(b.coords);
 
@@ -340,6 +350,8 @@ static void search_reordered_rmsd(
             continue;
         }
 
+        // Preserve graph structure as the mapping is built. This prevents the
+        // old too-broad behavior where any atom of the same element could swap.
         bool graph_consistent = true;
         for (std::size_t previous = 0; previous < atom_index; ++previous) {
             if (reference_bonded[atom_index][previous] != target_bonded[target_index][mapping[previous]]) {
@@ -379,6 +391,9 @@ static RmsdMatch best_graph_preserving_reordered_rmsd(
         throw std::runtime_error("Atom count differs during reordered RMSD comparison");
     }
 
+    // Reorder mode is graph-preserving, not merely element-preserving.
+    // Candidate atoms must have matching local signatures and pass the
+    // bond/non-bond consistency checks in search_reordered_rmsd.
     const MolecularGraph reference_graph = infer_graph(reference, bond_scale);
     const MolecularGraph target_graph = infer_graph(target, bond_scale);
 
@@ -560,6 +575,9 @@ int main(int argc, char** argv) {
             for (const UniqueEntry& candidate : unique) {
                 double rmsd = 0.0;
                 if (allow_reorder) {
+                    // For XYZ-only reordered inputs, infer a graph and search
+                    // graph-compatible mappings. If this fails on valid chemistry,
+                    // prefer RDKit SDF mode or tune --bond-scale.
                     const RmsdMatch match =
                         best_graph_preserving_reordered_rmsd(candidate.mol, mol, max_mappings, bond_scale);
                     if (match.mappings_checked >= max_mappings && !std::isfinite(match.best)) {

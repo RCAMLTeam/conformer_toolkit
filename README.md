@@ -167,9 +167,4 @@ In the local ethanol test, the C++ fixed-order loop was about 9x faster than `rd
 
 ## Source Debug Notes
 
-Each implementation has an adjacent explanation file:
-
-- `src/conformer_identical_explained.md`
-- `src/conformer_deduplicate_explained.md`
-- `src/deduplicate_rdkit_explained.md`
-- `src/benchmark_rdkit_vs_cpp_explained.md`
+Debugging notes are embedded directly in the source files as `//` comments for C++ and `#` comments for Python.

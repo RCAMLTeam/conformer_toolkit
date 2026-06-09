@@ -148,6 +148,8 @@ static double aligned_rmsd(const Molecule& a, const Molecule& b) {
         return 0.0;
     }
 
+    // This is the core fixed-order RMSD path. Debug with translated/rotated
+    // copies first; any nonzero RMSD there means the alignment math is wrong.
     const std::vector<Vec3> p = centered(a.coords);
     const std::vector<Vec3> q = centered(b.coords);
 
@@ -235,6 +237,8 @@ int main(int argc, char** argv) {
             return 1;
         }
 
+        // Repeat mode measures the in-process RMSD loop instead of process
+        // startup overhead, which is important for fair RDKit benchmarking.
         double rmsd = 0.0;
         const auto start = std::chrono::steady_clock::now();
         for (std::size_t i = 0; i < repeat; ++i) {
