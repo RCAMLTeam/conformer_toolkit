@@ -36,7 +36,7 @@ For each comparison, the code:
 5. Computes aligned RMSD for each graph-allowed mapping.
 6. Uses the lowest RMSD mapping for duplicate detection.
 
-This mode is useful for XYZ-only data, but inferred connectivity is still a heuristic. Symmetric molecules or many repeated atoms can produce multiple valid mappings. If mapping search becomes too large, increase `--max-mappings` or use the RDKit path with explicit connectivity.
+This mode is useful for XYZ-only data, but inferred connectivity is still a heuristic. Symmetric molecules or many repeated atoms can produce multiple valid graph mappings; the tool keeps the mapping with the lowest aligned RMSD. If mapping search becomes too large, increase `--max-mappings` or use the RDKit path with explicit connectivity.
 
 ### RDKit Graph-Aware Deduplication
 
@@ -67,7 +67,55 @@ The RDKit script uses the existing local Python environment:
 ./conformer_toolkit/bin/python -m py_compile src/deduplicate_rdkit.py
 ```
 
+Build the Python extension for the C++ `Conformer_Batch` API:
+
+```bash
+./conformer_toolkit/bin/python src/build_pybind.py
+```
+
 ## Usage
+
+The C++ batch tool is built around a `Conformer_Batch` class. It can load conformers from explicit XYZ file paths, all `.xyz` files under a directory, or a concatenated multi-XYZ file. The class exposes `index_cleanup` for atom-order normalization and `remove_duplicates`, which can optionally run `index_cleanup` before RMSD deduplication.
+
+### Python Interface
+
+After building the pybind11 extension, import it with `src` on `PYTHONPATH`:
+
+```bash
+PYTHONPATH=src ./conformer_toolkit/bin/python
+```
+
+```python
+from conformer_toolkit_cpp import Conformer_Batch
+
+batch = Conformer_Batch.from_xyz_files([
+    "conf_001.xyz",
+    "conf_002.xyz",
+])
+
+result = batch.remove_duplicates(
+    tolerance=0.001,
+    run_index_cleanup=True,
+)
+
+print(len(result.unique), len(result.duplicates))
+for duplicate in result.duplicates:
+    print(duplicate.path, duplicate.representative_path, duplicate.rmsd)
+```
+
+Other loaders:
+
+```python
+batch = Conformer_Batch.from_xyz_directory("conformer_dir")
+batch = Conformer_Batch.from_multi_xyz("conformers.xyz")
+```
+
+Run index cleanup on its own:
+
+```python
+batch.index_cleanup(max_mappings=1_000_000, bond_scale=1.1)
+batch.write_records("cleaned_xyz", "cleaned")
+```
 
 ### Compare Two Ordered XYZ Conformers
 
@@ -90,6 +138,18 @@ Exit codes:
 src/conformer_deduplicate --tolerance 0.001 conformer_*.xyz
 ```
 
+Load all `.xyz` files under a directory:
+
+```bash
+src/conformer_deduplicate --xyz-dir conformer_dir --tolerance 0.001
+```
+
+Load a concatenated multi-XYZ file:
+
+```bash
+src/conformer_deduplicate --multi-xyz conformers.xyz --tolerance 0.001
+```
+
 Write unique representatives:
 
 ```bash
@@ -102,6 +162,20 @@ Default behavior requires the same atom symbols in the same order for every inpu
 
 ```bash
 src/conformer_deduplicate --allow-reorder --tolerance 0.001 conformer_*.xyz
+```
+
+`--allow-reorder` calls `Conformer_Batch::remove_duplicates` with its cleanup option enabled, so atom indexing is normalized before duplicate removal.
+
+Run index cleanup on its own and write reordered XYZ files:
+
+```bash
+src/conformer_deduplicate --multi-xyz conformers.xyz --index-cleanup-only --write-cleaned cleaned_xyz
+```
+
+Write cleaned conformers while also removing duplicates:
+
+```bash
+src/conformer_deduplicate --allow-reorder --write-cleaned cleaned_xyz --write-unique unique_xyz conformer_*.xyz
 ```
 
 Control inferred bonding and mapping search:
@@ -163,6 +237,7 @@ In the local ethanol test, the C++ fixed-order loop was about 9x faster than `rd
 - XYZ files do not contain reliable connectivity. The C++ reorder mode infers bonds from distances, which can be wrong for unusual bonding.
 - The C++ tools compare conformers by RMSD only; they do not check molecular charge, bond order, stereochemistry, or energy.
 - `--allow-reorder` performs exhaustive graph-compatible mapping search and can become expensive for highly symmetric molecules.
+- When multiple graph-compatible mappings exist, the C++ reorder mode chooses the lowest-RMSD mapping.
 - RDKit graph-aware mode requires inputs that RDKit can parse with connectivity, such as SDF/MOL.
 
 ## Source Debug Notes
