@@ -4,7 +4,7 @@ Tools for checking whether conformers are duplicates and reducing a conformer se
 
 The toolkit has two deduplication paths:
 
-- Fast C++ XYZ path for ordered conformers, with an optional geometry-only atom reordering mode.
+- Fast C++ XYZ path for ordered conformers, with an optional graph-aware atom reordering mode from inferred bonds.
 - RDKit SDF path for chemistry-aware atom matching when molecular connectivity is available.
 
 ## Algorithms
@@ -23,18 +23,20 @@ For each comparison, the code:
 
 This is the fastest and safest mode when conformers came from the same molecule file or workflow and atom ordering is preserved.
 
-### XYZ Geometry-Only Reordering
+### XYZ Graph-Aware Reordering From Inferred Bonds
 
 `conformer_deduplicate --allow-reorder` supports XYZ files whose atoms are not in the same order.
 
 For each comparison, the code:
 
 1. Verifies the two conformers have the same element counts.
-2. Searches element-preserving atom mappings.
-3. Computes aligned RMSD for each mapping.
-4. Uses the lowest RMSD mapping for duplicate detection.
+2. Infers a molecular graph from covalent radii and interatomic distances.
+3. Builds atom signatures from element, degree, and sorted neighbor elements.
+4. Searches only graph-preserving atom mappings.
+5. Computes aligned RMSD for each graph-allowed mapping.
+6. Uses the lowest RMSD mapping for duplicate detection.
 
-This mode is useful for XYZ-only data, but it has no bond graph. Symmetric molecules or many repeated atoms can produce ambiguous mappings. If mapping search becomes too large, increase `--max-mappings` or use the RDKit path with connectivity.
+This mode is useful for XYZ-only data, but inferred connectivity is still a heuristic. Symmetric molecules or many repeated atoms can produce multiple valid mappings. If mapping search becomes too large, increase `--max-mappings` or use the RDKit path with explicit connectivity.
 
 ### RDKit Graph-Aware Deduplication
 
@@ -102,13 +104,16 @@ Default behavior requires the same atom symbols in the same order for every inpu
 src/conformer_deduplicate --allow-reorder --tolerance 0.001 conformer_*.xyz
 ```
 
-Limit or expand the mapping search:
+Control inferred bonding and mapping search:
 
 ```bash
+src/conformer_deduplicate --allow-reorder --bond-scale 1.1 conformer_*.xyz
 src/conformer_deduplicate --allow-reorder --max-mappings 10000000 conformer_*.xyz
 ```
 
-Use this only when you have XYZ files and no connectivity. For symmetric or highly repetitive structures, prefer RDKit with SDF input.
+`--bond-scale` multiplies the sum of covalent radii to decide whether two atoms are bonded. The default is `1.1`.
+
+Use this when you have XYZ files and no explicit connectivity. For symmetric, charged, organometallic, or unusual bonding cases, prefer RDKit with SDF input.
 
 ### Deduplicate SDF With RDKit
 
@@ -155,7 +160,16 @@ In the local ethanol test, the C++ fixed-order loop was about 9x faster than `rd
 
 ## Limitations
 
-- XYZ files do not contain reliable connectivity. Geometry-only reordering can be ambiguous.
+- XYZ files do not contain reliable connectivity. The C++ reorder mode infers bonds from distances, which can be wrong for unusual bonding.
 - The C++ tools compare conformers by RMSD only; they do not check molecular charge, bond order, stereochemistry, or energy.
-- `--allow-reorder` performs exhaustive element-wise mapping search and can become expensive for many identical atoms.
+- `--allow-reorder` performs exhaustive graph-compatible mapping search and can become expensive for highly symmetric molecules.
 - RDKit graph-aware mode requires inputs that RDKit can parse with connectivity, such as SDF/MOL.
+
+## Source Debug Notes
+
+Each implementation has an adjacent explanation file:
+
+- `src/conformer_identical_explained.md`
+- `src/conformer_deduplicate_explained.md`
+- `src/deduplicate_rdkit_explained.md`
+- `src/benchmark_rdkit_vs_cpp_explained.md`

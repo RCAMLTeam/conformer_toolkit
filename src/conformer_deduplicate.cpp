@@ -24,6 +24,11 @@ struct Molecule {
     std::vector<Vec3> coords;
 };
 
+struct MolecularGraph {
+    std::vector<std::vector<bool>> bonded;
+    std::vector<std::string> signatures;
+};
+
 struct UniqueEntry {
     std::size_t input_index{};
     std::string path;
@@ -133,6 +138,73 @@ static double norm_squared_sum(const std::vector<Vec3>& coords) {
     return total;
 }
 
+static double covalent_radius(const std::string& symbol) {
+    if (symbol == "H") return 0.31;
+    if (symbol == "B") return 0.84;
+    if (symbol == "C") return 0.76;
+    if (symbol == "N") return 0.71;
+    if (symbol == "O") return 0.66;
+    if (symbol == "F") return 0.57;
+    if (symbol == "P") return 1.07;
+    if (symbol == "S") return 1.05;
+    if (symbol == "Cl") return 1.02;
+    if (symbol == "Br") return 1.20;
+    if (symbol == "I") return 1.39;
+    if (symbol == "Si") return 1.11;
+    if (symbol == "Na") return 1.66;
+    if (symbol == "K") return 2.03;
+    if (symbol == "Li") return 1.28;
+    if (symbol == "Mg") return 1.41;
+    if (symbol == "Ca") return 1.76;
+    if (symbol == "Zn") return 1.22;
+    if (symbol == "Fe") return 1.32;
+    if (symbol == "Cu") return 1.32;
+    return 0.77;
+}
+
+static double distance(const Vec3& a, const Vec3& b) {
+    const double dx = a.x - b.x;
+    const double dy = a.y - b.y;
+    const double dz = a.z - b.z;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+static MolecularGraph infer_graph(const Molecule& mol, double bond_scale) {
+    const std::size_t n = mol.coords.size();
+    MolecularGraph graph;
+    graph.bonded.assign(n, std::vector<bool>(n, false));
+    graph.signatures.resize(n);
+
+    for (std::size_t i = 0; i < n; ++i) {
+        for (std::size_t j = i + 1; j < n; ++j) {
+            const double cutoff = bond_scale * (covalent_radius(mol.symbols[i]) + covalent_radius(mol.symbols[j]));
+            if (distance(mol.coords[i], mol.coords[j]) <= cutoff) {
+                graph.bonded[i][j] = true;
+                graph.bonded[j][i] = true;
+            }
+        }
+    }
+
+    for (std::size_t i = 0; i < n; ++i) {
+        std::vector<std::string> neighbor_symbols;
+        for (std::size_t j = 0; j < n; ++j) {
+            if (graph.bonded[i][j]) {
+                neighbor_symbols.push_back(mol.symbols[j]);
+            }
+        }
+        std::sort(neighbor_symbols.begin(), neighbor_symbols.end());
+
+        std::ostringstream signature;
+        signature << mol.symbols[i] << "|degree=" << neighbor_symbols.size() << "|neighbors=";
+        for (const std::string& neighbor : neighbor_symbols) {
+            signature << neighbor << ",";
+        }
+        graph.signatures[i] = signature.str();
+    }
+
+    return graph;
+}
+
 static double largest_eigenvalue_symmetric_4x4(const std::array<std::array<double, 4>, 4>& matrix) {
     std::array<double, 4> q{1.0, 0.0, 0.0, 0.0};
 
@@ -238,6 +310,8 @@ static void search_reordered_rmsd(
     const Molecule& reference,
     const Molecule& target,
     const std::vector<std::vector<std::size_t>>& candidates,
+    const std::vector<std::vector<bool>>& reference_bonded,
+    const std::vector<std::vector<bool>>& target_bonded,
     std::size_t atom_index,
     std::vector<bool>& used,
     std::vector<std::size_t>& mapping,
@@ -265,26 +339,53 @@ static void search_reordered_rmsd(
         if (used[target_index]) {
             continue;
         }
+
+        bool graph_consistent = true;
+        for (std::size_t previous = 0; previous < atom_index; ++previous) {
+            if (reference_bonded[atom_index][previous] != target_bonded[target_index][mapping[previous]]) {
+                graph_consistent = false;
+                break;
+            }
+        }
+        if (!graph_consistent) {
+            continue;
+        }
+
         used[target_index] = true;
         mapping[atom_index] = target_index;
-        search_reordered_rmsd(reference, target, candidates, atom_index + 1, used, mapping, max_mappings, match);
+        search_reordered_rmsd(
+            reference,
+            target,
+            candidates,
+            reference_bonded,
+            target_bonded,
+            atom_index + 1,
+            used,
+            mapping,
+            max_mappings,
+            match
+        );
         used[target_index] = false;
     }
 }
 
-static RmsdMatch best_element_preserving_reordered_rmsd(
+static RmsdMatch best_graph_preserving_reordered_rmsd(
     const Molecule& reference,
     const Molecule& target,
-    std::size_t max_mappings
+    std::size_t max_mappings,
+    double bond_scale
 ) {
     if (reference.coords.size() != target.coords.size()) {
         throw std::runtime_error("Atom count differs during reordered RMSD comparison");
     }
 
+    const MolecularGraph reference_graph = infer_graph(reference, bond_scale);
+    const MolecularGraph target_graph = infer_graph(target, bond_scale);
+
     std::vector<std::vector<std::size_t>> candidates(reference.coords.size());
     for (std::size_t i = 0; i < reference.symbols.size(); ++i) {
         for (std::size_t j = 0; j < target.symbols.size(); ++j) {
-            if (reference.symbols[i] == target.symbols[j]) {
+            if (reference_graph.signatures[i] == target_graph.signatures[j]) {
                 candidates[i].push_back(j);
             }
         }
@@ -302,6 +403,7 @@ static RmsdMatch best_element_preserving_reordered_rmsd(
     });
 
     std::vector<std::vector<std::size_t>> ordered_candidates(reference.coords.size());
+    std::vector<std::vector<bool>> ordered_reference_bonded(reference.coords.size(), std::vector<bool>(reference.coords.size(), false));
     Molecule ordered_reference;
     ordered_reference.symbols.reserve(reference.coords.size());
     ordered_reference.coords.reserve(reference.coords.size());
@@ -310,11 +412,27 @@ static RmsdMatch best_element_preserving_reordered_rmsd(
         ordered_reference.symbols.push_back(reference.symbols[order[pos]]);
         ordered_reference.coords.push_back(reference.coords[order[pos]]);
     }
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        for (std::size_t j = 0; j < order.size(); ++j) {
+            ordered_reference_bonded[i][j] = reference_graph.bonded[order[i]][order[j]];
+        }
+    }
 
     std::vector<bool> used(target.coords.size(), false);
     std::vector<std::size_t> mapping(reference.coords.size());
     RmsdMatch match;
-    search_reordered_rmsd(ordered_reference, target, ordered_candidates, 0, used, mapping, max_mappings, match);
+    search_reordered_rmsd(
+        ordered_reference,
+        target,
+        ordered_candidates,
+        ordered_reference_bonded,
+        target_graph.bonded,
+        0,
+        used,
+        mapping,
+        max_mappings,
+        match
+    );
     return match;
 }
 
@@ -349,15 +467,16 @@ static void assert_same_formula(const Molecule& reference, const Molecule& mol, 
 static void usage(const char* program) {
     std::cerr << "Usage: " << program
               << " [--tolerance angstrom] [--allow-reorder] [--max-mappings n] [--ambiguity-gap angstrom]"
-              << " [--write-unique dir] conformer1.xyz conformer2.xyz [...]\n"
+              << " [--bond-scale scale] [--write-unique dir] conformer1.xyz conformer2.xyz [...]\n"
               << "Keeps the first representative of each unique conformer group.\n"
               << "By default all conformers must have the same atom symbols in the same order.\n"
-              << "--allow-reorder permits XYZ-only element-preserving atom reindexing by geometry.\n";
+              << "--allow-reorder permits XYZ-only graph-preserving atom reindexing from inferred bonds.\n";
 }
 
 int main(int argc, char** argv) {
     double tolerance = 1e-3;
     double ambiguity_gap = 1e-6;
+    double bond_scale = 1.1;
     bool allow_reorder = false;
     std::size_t max_mappings = 1000000;
     std::filesystem::path write_unique_dir;
@@ -374,6 +493,12 @@ int main(int argc, char** argv) {
                 tolerance = std::stod(argv[++i]);
             } else if (arg == "--allow-reorder") {
                 allow_reorder = true;
+            } else if (arg == "--bond-scale") {
+                if (i + 1 >= argc) {
+                    usage(argv[0]);
+                    return 2;
+                }
+                bond_scale = std::stod(argv[++i]);
             } else if (arg == "--max-mappings") {
                 if (i + 1 >= argc) {
                     usage(argv[0]);
@@ -413,6 +538,9 @@ int main(int argc, char** argv) {
         if (max_mappings == 0) {
             throw std::runtime_error("--max-mappings must be greater than zero");
         }
+        if (bond_scale <= 0.0) {
+            throw std::runtime_error("--bond-scale must be greater than zero");
+        }
 
         std::vector<UniqueEntry> unique;
         std::vector<DuplicateEntry> duplicates;
@@ -432,7 +560,8 @@ int main(int argc, char** argv) {
             for (const UniqueEntry& candidate : unique) {
                 double rmsd = 0.0;
                 if (allow_reorder) {
-                    const RmsdMatch match = best_element_preserving_reordered_rmsd(candidate.mol, mol, max_mappings);
+                    const RmsdMatch match =
+                        best_graph_preserving_reordered_rmsd(candidate.mol, mol, max_mappings, bond_scale);
                     if (match.mappings_checked >= max_mappings && !std::isfinite(match.best)) {
                         throw std::runtime_error("Mapping limit reached before a valid mapping was checked for " + paths[i]);
                     }
