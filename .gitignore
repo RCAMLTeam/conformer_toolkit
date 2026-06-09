@@ -1,0 +1,35 @@
+# Python environments and caches
+.venv/
+venv/
+env/
+conformer_toolkit/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# C++ build outputs
+src/conformer_identical
+src/conformer_deduplicate
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Generated benchmark and run outputs
+src/benchmark_data/
+src/testdata/unique_out/
+src/testdata/ethanol_unique.sdf
+unique_xyz/
+unique.sdf
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
