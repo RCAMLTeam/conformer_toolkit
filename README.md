@@ -52,7 +52,7 @@ This is slower than the fixed-order C++ path, but it is chemically safer when at
 
 ## Build
 
-From `/home/alan/conformer_toolkit`:
+From the package root:
 
 ```bash
 g++ -O3 -std=c++17 -Wall -Wextra -pedantic src/conformer_identical.cpp -o src/conformer_identical
