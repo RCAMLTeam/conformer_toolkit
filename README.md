@@ -7,6 +7,23 @@ The toolkit has two deduplication paths:
 - Fast C++ XYZ path for ordered conformers, with an optional graph-aware atom reordering mode from inferred bonds.
 - RDKit SDF path for chemistry-aware atom matching when molecular connectivity is available.
 
+All commands below are run from the repository root. CMake writes the two
+executables and the optional Python extension to `src/`.
+
+## Repository Layout
+
+```text
+.
+├── CMakeLists.txt
+├── README.md
+└── src/
+    ├── conformer_deduplicate.cpp
+    ├── conformer_identical.cpp
+    ├── conformer_toolkit_bindings.cpp
+    ├── deduplicate_rdkit.py
+    └── testdata/
+```
+
 ## Algorithms
 
 ### Ordered XYZ RMSD
@@ -64,6 +81,10 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
+After a successful build, the command-line tools are available as
+`src/conformer_identical` and `src/conformer_deduplicate`. If Python bindings
+are enabled, the `conformer_toolkit_cpp` extension is also written to `src/`.
+
 Some packaged RDKit builds, including Debian's, omit the `DetermineBonds` library and header. Use a matching RDKit source checkout in that case:
 
 ```bash
@@ -92,7 +113,7 @@ The C++ batch tool is built around a `Conformer_Batch` class. It can load confor
 After building the pybind11 extension, import it with `src` on `PYTHONPATH`:
 
 ```bash
-PYTHONPATH=src ./conformer_toolkit/bin/python
+PYTHONPATH=src python3
 ```
 
 ```python
@@ -205,19 +226,19 @@ XYZ does not encode total molecular charge. `--charge` therefore defaults to `0`
 ### Deduplicate SDF With RDKit
 
 ```bash
-./conformer_toolkit/bin/python src/deduplicate_rdkit.py --tolerance 0.001 input.sdf
+python3 src/deduplicate_rdkit.py --tolerance 0.001 input.sdf
 ```
 
 Write unique representatives to an SDF:
 
 ```bash
-./conformer_toolkit/bin/python src/deduplicate_rdkit.py --tolerance 0.001 --write-unique unique.sdf input.sdf
+python3 src/deduplicate_rdkit.py --tolerance 0.001 --write-unique unique.sdf input.sdf
 ```
 
 Multiple SDF files can be passed:
 
 ```bash
-./conformer_toolkit/bin/python src/deduplicate_rdkit.py --tolerance 0.001 batch_1.sdf batch_2.sdf
+python3 src/deduplicate_rdkit.py --tolerance 0.001 batch_1.sdf batch_2.sdf
 ```
 
 ## Output
@@ -240,7 +261,7 @@ duplicate input_index 1 path conformer_002.xyz representative_input_index 0 repr
 Benchmark the C++ fixed-order RMSD loop against RDKit `GetBestRMS`:
 
 ```bash
-./conformer_toolkit/bin/python src/benchmark_rdkit_vs_cpp.py --repeat 100000
+python3 src/benchmark_rdkit_vs_cpp.py --repeat 100000
 ```
 
 In the local ethanol test, the C++ fixed-order loop was about 9x faster than `rdMolAlign.GetBestRMS`. RDKit does more chemistry-aware work, so use the faster C++ path only when its atom-order assumptions are valid.
