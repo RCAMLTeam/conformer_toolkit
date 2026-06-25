@@ -64,8 +64,9 @@ PYBIND11_MODULE(conformer_toolkit_cpp, m) {
             "index_cleanup",
             &Conformer_Batch::index_cleanup,
             py::arg("max_mappings") = 1000000,
-            py::arg("bond_scale") = 1.1,
-            py::arg("ambiguity_gap") = 1e-6
+            py::arg("bond_scale") = 1.3,
+            py::arg("ambiguity_gap") = 1e-6,
+            py::arg("charge") = 0
         )
         .def(
             "remove_duplicates",
@@ -73,8 +74,9 @@ PYBIND11_MODULE(conformer_toolkit_cpp, m) {
             py::arg("tolerance") = 1e-3,
             py::arg("run_index_cleanup") = false,
             py::arg("max_mappings") = 1000000,
-            py::arg("bond_scale") = 1.1,
-            py::arg("ambiguity_gap") = 1e-6
+            py::arg("bond_scale") = 1.3,
+            py::arg("ambiguity_gap") = 1e-6,
+            py::arg("charge") = 0
         )
         .def(
             "write_records",

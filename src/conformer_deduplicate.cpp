@@ -8,10 +8,17 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <GraphMol/DetermineBonds/DetermineBonds.h>
+#include <GraphMol/FileParsers/FileParsers.h>
+#include <GraphMol/MolOps.h>
+#include <GraphMol/RDKitBase.h>
+#include <GraphMol/Substruct/SubstructMatch.h>
 
 struct Vec3 {
     double x{};
@@ -29,11 +36,6 @@ struct Conformer_Record {
     std::string source;
     std::string comment;
     Molecule mol;
-};
-
-struct MolecularGraph {
-    std::vector<std::vector<bool>> bonded;
-    std::vector<std::string> signatures;
 };
 
 struct UniqueEntry {
@@ -149,79 +151,98 @@ static double norm_squared_sum(const std::vector<Vec3>& coords) {
     return total;
 }
 
-static double covalent_radius(const std::string& symbol) {
-    // Covalent radii are only used to infer a rough graph from XYZ.
-    // If --allow-reorder misses expected duplicates, --bond-scale and this table
-    // are the first places to inspect.
-    if (symbol == "H") return 0.31;
-    if (symbol == "B") return 0.84;
-    if (symbol == "C") return 0.76;
-    if (symbol == "N") return 0.71;
-    if (symbol == "O") return 0.66;
-    if (symbol == "F") return 0.57;
-    if (symbol == "P") return 1.07;
-    if (symbol == "S") return 1.05;
-    if (symbol == "Cl") return 1.02;
-    if (symbol == "Br") return 1.20;
-    if (symbol == "I") return 1.39;
-    if (symbol == "Si") return 1.11;
-    if (symbol == "Na") return 1.66;
-    if (symbol == "K") return 2.03;
-    if (symbol == "Li") return 1.28;
-    if (symbol == "Mg") return 1.41;
-    if (symbol == "Ca") return 1.76;
-    if (symbol == "Zn") return 1.22;
-    if (symbol == "Fe") return 1.32;
-    if (symbol == "Cu") return 1.32;
-    throw std::runtime_error("Covalent radius not defined for element: " + symbol);
+static std::string xyz_block(const Molecule& mol) {
+    std::ostringstream out;
+    out << mol.coords.size() << "\n\n";
+    out << std::setprecision(17);
+    for (std::size_t i = 0; i < mol.coords.size(); ++i) {
+        out << mol.symbols[i] << " " << mol.coords[i].x << " " << mol.coords[i].y << " " << mol.coords[i].z << "\n";
+    }
+    return out.str();
 }
 
-static double distance(const Vec3& a, const Vec3& b) {
-    const double dx = a.x - b.x;
-    const double dy = a.y - b.y;
-    const double dz = a.z - b.z;
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
+static std::unique_ptr<RDKit::RWMol> chemistry_from_xyz(
+    const Molecule& mol,
+    double bond_scale,
+    int charge
+) {
+    std::unique_ptr<RDKit::RWMol> rd_mol = RDKit::v2::FileParsers::MolFromXYZBlock(xyz_block(mol));
+    if (!rd_mol) {
+        throw std::runtime_error("RDKit could not parse the XYZ record");
+    }
+
+    try {
+        // XYZ carries no connectivity. DetermineBonds applies the xyz2mol
+        // algorithm, then sanitizes and assigns tetrahedral/double-bond stereo
+        // from the 3D conformer. useVdw=true makes bond_scale the covalent-radius
+        // multiplier, preserving the existing CLI/API control.
+        RDKit::determineBonds(
+            *rd_mol,
+            false,
+            charge,
+            bond_scale,
+            true,
+            true,
+            false,
+            true
+        );
+        RDKit::MolOps::assignStereochemistry(*rd_mol, true, true, true);
+    } catch (const std::exception& exc) {
+        throw std::runtime_error(std::string("RDKit could not infer molecular chemistry from XYZ: ") + exc.what());
+    }
+    return rd_mol;
 }
 
-static MolecularGraph infer_graph(const Molecule& mol, double bond_scale) {
-    // XYZ has no bond table, so this builds a debugging-friendly approximation:
-    // distance <= bond_scale * (r_cov_a + r_cov_b) means bonded.
-    const std::size_t n = mol.coords.size();
-    MolecularGraph graph;
-    graph.bonded.assign(n, std::vector<bool>(n, false));
-    graph.signatures.resize(n);
-
-    for (std::size_t i = 0; i < n; ++i) {
-        for (std::size_t j = i + 1; j < n; ++j) {
-            const double cutoff = bond_scale * (covalent_radius(mol.symbols[i]) + covalent_radius(mol.symbols[j]));
-            if (distance(mol.coords[i], mol.coords[j]) <= cutoff) {
-                graph.bonded[i][j] = true;
-                graph.bonded[j][i] = true;
-            }
-        }
+static std::vector<std::vector<std::size_t>> chemistry_preserving_mappings(
+    const Molecule& reference,
+    const Molecule& target,
+    std::size_t max_mappings,
+    double bond_scale,
+    int charge,
+    bool use_chirality
+) {
+    if (reference.coords.size() != target.coords.size()) {
+        return {};
     }
 
-    for (std::size_t i = 0; i < n; ++i) {
-        std::vector<std::string> neighbor_symbols;
-        for (std::size_t j = 0; j < n; ++j) {
-            if (graph.bonded[i][j]) {
-                neighbor_symbols.push_back(mol.symbols[j]);
-            }
-        }
-        std::sort(neighbor_symbols.begin(), neighbor_symbols.end());
-
-        // The signature narrows atom mapping candidates before recursion.
-        // It intentionally stays local and simple; RDKit mode is preferred when
-        // bond order, aromaticity, charge, or stereochemistry matters.
-        std::ostringstream signature;
-        signature << mol.symbols[i] << "|degree=" << neighbor_symbols.size() << "|neighbors=";
-        for (const std::string& neighbor : neighbor_symbols) {
-            signature << neighbor << ",";
-        }
-        graph.signatures[i] = signature.str();
+    const std::unique_ptr<RDKit::RWMol> reference_mol = chemistry_from_xyz(reference, bond_scale, charge);
+    std::unique_ptr<RDKit::RWMol> target_mol;
+    try {
+        target_mol = chemistry_from_xyz(target, bond_scale, charge);
+    } catch (const std::exception&) {
+        // A highly distorted candidate may no longer support bond inference
+        // from its coordinates. It is not chemically matchable to the
+        // reference, but that should classify it as different rather than
+        // aborting an otherwise valid conformer batch.
+        return {};
     }
 
-    return graph;
+    RDKit::SubstructMatchParameters params;
+    params.useChirality = use_chirality;
+    params.useEnhancedStereo = use_chirality;
+    params.specifiedStereoQueryMatchesUnspecified = false;
+    params.uniquify = false;
+    params.maxMatches = static_cast<unsigned int>(
+        std::min<std::size_t>(max_mappings, std::numeric_limits<unsigned int>::max())
+    );
+
+    // Each pair is (reference/query atom, target atom). Equal atom counts make
+    // a complete substructure match a full graph isomorphism; bond orders,
+    // formal charges, atom types, and assigned stereochemistry all participate.
+    const std::vector<RDKit::MatchVectType> matches = RDKit::SubstructMatch(*target_mol, *reference_mol, params);
+    std::vector<std::vector<std::size_t>> mappings;
+    mappings.reserve(matches.size());
+    for (const RDKit::MatchVectType& match : matches) {
+        if (match.size() != reference.coords.size()) {
+            continue;
+        }
+        std::vector<std::size_t> mapping(reference.coords.size());
+        for (const auto& pair : match) {
+            mapping[static_cast<std::size_t>(pair.first)] = static_cast<std::size_t>(pair.second);
+        }
+        mappings.push_back(std::move(mapping));
+    }
+    return mappings;
 }
 
 static double largest_eigenvalue_symmetric_4x4(const std::array<std::array<double, 4>, 4>& matrix) {
@@ -327,23 +348,22 @@ static Molecule reordered_molecule(const Molecule& target, const std::vector<std
     return out;
 }
 
-static void search_reordered_rmsd(
+static RmsdMatch best_graph_preserving_reordered_rmsd(
     const Molecule& reference,
     const Molecule& target,
-    const std::vector<std::vector<std::size_t>>& candidates,
-    const std::vector<std::vector<bool>>& reference_bonded,
-    const std::vector<std::vector<bool>>& target_bonded,
-    std::size_t atom_index,
-    std::vector<bool>& used,
-    std::vector<std::size_t>& mapping,
     std::size_t max_mappings,
-    RmsdMatch& match
+    double bond_scale,
+    int charge,
+    bool use_chirality
 ) {
-    if (match.mappings_checked >= max_mappings) {
-        return;
+    if (reference.coords.size() != target.coords.size()) {
+        throw std::runtime_error("Atom count differs during reordered RMSD comparison");
     }
 
-    if (atom_index == reference.coords.size()) {
+    RmsdMatch match;
+    const std::vector<std::vector<std::size_t>> mappings =
+        chemistry_preserving_mappings(reference, target, max_mappings, bond_scale, charge, use_chirality);
+    for (const std::vector<std::size_t>& mapping : mappings) {
         const Molecule reordered = reordered_molecule(target, mapping);
         const double rmsd = aligned_rmsd(reference, reordered);
         ++match.mappings_checked;
@@ -354,118 +374,6 @@ static void search_reordered_rmsd(
         } else if (rmsd < match.second) {
             match.second = rmsd;
         }
-        return;
-    }
-
-    for (std::size_t target_index : candidates[atom_index]) {
-        if (used[target_index]) {
-            continue;
-        }
-
-        // Preserve graph structure as the mapping is built. This prevents the
-        // old too-broad behavior where any atom of the same element could swap.
-        bool graph_consistent = true;
-        for (std::size_t previous = 0; previous < atom_index; ++previous) {
-            if (reference_bonded[atom_index][previous] != target_bonded[target_index][mapping[previous]]) {
-                graph_consistent = false;
-                break;
-            }
-        }
-        if (!graph_consistent) {
-            continue;
-        }
-
-        used[target_index] = true;
-        mapping[atom_index] = target_index;
-        search_reordered_rmsd(
-            reference,
-            target,
-            candidates,
-            reference_bonded,
-            target_bonded,
-            atom_index + 1,
-            used,
-            mapping,
-            max_mappings,
-            match
-        );
-        used[target_index] = false;
-    }
-}
-
-static RmsdMatch best_graph_preserving_reordered_rmsd(
-    const Molecule& reference,
-    const Molecule& target,
-    std::size_t max_mappings,
-    double bond_scale
-) {
-    if (reference.coords.size() != target.coords.size()) {
-        throw std::runtime_error("Atom count differs during reordered RMSD comparison");
-    }
-
-    // Reorder mode is graph-preserving, not merely element-preserving.
-    // Candidate atoms must have matching local signatures and pass the
-    // bond/non-bond consistency checks in search_reordered_rmsd.
-    const MolecularGraph reference_graph = infer_graph(reference, bond_scale);
-    const MolecularGraph target_graph = infer_graph(target, bond_scale);
-
-    std::vector<std::vector<std::size_t>> candidates(reference.coords.size());
-    for (std::size_t i = 0; i < reference.symbols.size(); ++i) {
-        for (std::size_t j = 0; j < target.symbols.size(); ++j) {
-            if (reference_graph.signatures[i] == target_graph.signatures[j]) {
-                candidates[i].push_back(j);
-            }
-        }
-        if (candidates[i].empty()) {
-            return {};
-        }
-    }
-
-    std::vector<std::size_t> order(reference.coords.size());
-    for (std::size_t i = 0; i < order.size(); ++i) {
-        order[i] = i;
-    }
-    std::stable_sort(order.begin(), order.end(), [&](std::size_t lhs, std::size_t rhs) {
-        return candidates[lhs].size() < candidates[rhs].size();
-    });
-
-    std::vector<std::vector<std::size_t>> ordered_candidates(reference.coords.size());
-    std::vector<std::vector<bool>> ordered_reference_bonded(reference.coords.size(), std::vector<bool>(reference.coords.size(), false));
-    Molecule ordered_reference;
-    ordered_reference.symbols.reserve(reference.coords.size());
-    ordered_reference.coords.reserve(reference.coords.size());
-    for (std::size_t pos = 0; pos < order.size(); ++pos) {
-        ordered_candidates[pos] = candidates[order[pos]];
-        ordered_reference.symbols.push_back(reference.symbols[order[pos]]);
-        ordered_reference.coords.push_back(reference.coords[order[pos]]);
-    }
-    for (std::size_t i = 0; i < order.size(); ++i) {
-        for (std::size_t j = 0; j < order.size(); ++j) {
-            ordered_reference_bonded[i][j] = reference_graph.bonded[order[i]][order[j]];
-        }
-    }
-
-    std::vector<bool> used(target.coords.size(), false);
-    std::vector<std::size_t> mapping(reference.coords.size());
-    RmsdMatch match;
-    search_reordered_rmsd(
-        ordered_reference,
-        target,
-        ordered_candidates,
-        ordered_reference_bonded,
-        target_graph.bonded,
-        0,
-        used,
-        mapping,
-        max_mappings,
-        match
-    );
-    if (!match.best_mapping.empty()) {
-        std::vector<std::size_t> original_order_mapping(reference.coords.size());
-        for (std::size_t pos = 0; pos < order.size(); ++pos) {
-            original_order_mapping[order[pos]] = match.best_mapping[pos];
-        }
-        match.best_mapping = std::move(original_order_mapping);
     }
     return match;
 }
@@ -580,7 +488,7 @@ public:
         return records_;
     }
 
-    void index_cleanup(std::size_t max_mappings, double bond_scale, double ambiguity_gap) {
+    void index_cleanup(std::size_t max_mappings, double bond_scale, double ambiguity_gap, int charge = 0) {
         // Reorder every conformer to match the first conformer's atom indexing.
         // This method is intentionally public because callers may want a cleaned
         // conformer set even when they are not removing duplicates yet.
@@ -597,7 +505,13 @@ public:
             }
 
             const RmsdMatch match =
-                best_graph_preserving_reordered_rmsd(reference, record.mol, max_mappings, bond_scale);
+                best_graph_preserving_reordered_rmsd(reference, record.mol, max_mappings, bond_scale, charge, false);
+            if (match.best_mapping.empty() && reference.symbols == record.mol.symbols) {
+                // If chemistry inference fails for a distorted conformer but
+                // atom symbols already follow the reference order, retain that
+                // order and let duplicate classification treat it as distinct.
+                continue;
+            }
             validate_mapping_result(match, record.source, max_mappings, ambiguity_gap);
             record.mol = reordered_molecule(record.mol, match.best_mapping);
             record.comment = "index-cleaned from " + record.source;
@@ -609,12 +523,13 @@ public:
         bool run_index_cleanup,
         std::size_t max_mappings,
         double bond_scale,
-        double ambiguity_gap
+        double ambiguity_gap,
+        int charge = 0
     ) {
         // run_index_cleanup is the class-level option that lets duplicate
         // removal handle reordered XYZ files in one call.
         if (run_index_cleanup) {
-            index_cleanup(max_mappings, bond_scale, ambiguity_gap);
+            index_cleanup(max_mappings, bond_scale, ambiguity_gap, charge);
         }
 
         Remove_Duplicates_Result result;
@@ -629,6 +544,11 @@ public:
             double best_rmsd = std::numeric_limits<double>::infinity();
             const UniqueEntry* best = nullptr;
             for (const UniqueEntry& candidate : result.unique) {
+                const std::vector<std::vector<std::size_t>> chemistry_matches =
+                    chemistry_preserving_mappings(candidate.mol, record.mol, 1, bond_scale, charge, true);
+                if (chemistry_matches.empty()) {
+                    continue;
+                }
                 const double rmsd = aligned_rmsd(candidate.mol, record.mol);
                 if (rmsd < best_rmsd) {
                     best_rmsd = rmsd;
@@ -682,7 +602,7 @@ private:
 static void usage(const char* program) {
     std::cerr << "Usage: " << program
               << " [--tolerance angstrom] [--allow-reorder] [--max-mappings n] [--ambiguity-gap angstrom]"
-              << " [--bond-scale scale] [--xyz-dir dir | --multi-xyz file] [--index-cleanup-only]"
+              << " [--bond-scale scale] [--charge integer] [--xyz-dir dir | --multi-xyz file] [--index-cleanup-only]"
               << " [--write-cleaned dir] [--write-unique dir] conformer1.xyz conformer2.xyz [...]\n"
               << "Keeps the first representative of each unique conformer group.\n"
               << "--xyz-dir loads all .xyz files under a directory, sorted by path.\n"
@@ -694,10 +614,11 @@ static void usage(const char* program) {
 int main(int argc, char** argv) {
     double tolerance = 1e-3;
     double ambiguity_gap = 1e-6;
-    double bond_scale = 1.1;
+    double bond_scale = 1.3;
     bool allow_reorder = false;
     bool index_cleanup_only = false;
     std::size_t max_mappings = 1000000;
+    int charge = 0;
     std::filesystem::path xyz_dir;
     std::filesystem::path multi_xyz;
     std::filesystem::path write_cleaned_dir;
@@ -729,6 +650,12 @@ int main(int argc, char** argv) {
                     return 2;
                 }
                 xyz_dir = argv[++i];
+            } else if (arg == "--charge") {
+                if (i + 1 >= argc) {
+                    usage(argv[0]);
+                    return 2;
+                }
+                charge = std::stoi(argv[++i]);
             } else if (arg == "--multi-xyz") {
                 if (i + 1 >= argc) {
                     usage(argv[0]);
@@ -798,7 +725,7 @@ int main(int argc, char** argv) {
 
         const auto start = std::chrono::steady_clock::now();
         if (index_cleanup_only) {
-            batch.index_cleanup(max_mappings, bond_scale, ambiguity_gap);
+            batch.index_cleanup(max_mappings, bond_scale, ambiguity_gap, charge);
             if (write_cleaned_dir.empty()) {
                 throw std::runtime_error("--index-cleanup-only requires --write-cleaned");
             }
@@ -807,7 +734,7 @@ int main(int argc, char** argv) {
         const Conformer_Batch::Remove_Duplicates_Result result =
             index_cleanup_only
                 ? Conformer_Batch::Remove_Duplicates_Result{}
-                : batch.remove_duplicates(tolerance, allow_reorder, max_mappings, bond_scale, ambiguity_gap);
+                : batch.remove_duplicates(tolerance, allow_reorder, max_mappings, bond_scale, ambiguity_gap, charge);
         const auto stop = std::chrono::steady_clock::now();
         const std::chrono::duration<double> elapsed = stop - start;
 

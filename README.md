@@ -11,36 +11,37 @@ The toolkit has two deduplication paths:
 
 ### Ordered XYZ RMSD
 
-`conformer_identical` and the default `conformer_deduplicate` mode assume every XYZ file uses the same atom index order.
+`conformer_identical` and the default `conformer_deduplicate` mode assume every XYZ file uses the same atom index order. RDKit C++ is used by default to infer and verify molecular chemistry before RMSD comparison.
 
 For each comparison, the code:
 
 1. Reads atom symbols and Cartesian coordinates from XYZ.
-2. Verifies atom count and atom symbols match in the same order.
-3. Removes translation by centering both conformers.
-4. Computes the optimal rigid rotation using Horn's quaternion RMSD formulation.
-5. Classifies conformers as duplicates when aligned RMSD is less than or equal to the tolerance.
+2. Uses RDKit `DetermineBonds`/xyz2mol to infer connectivity, bond orders, formal charges, and 3D stereochemistry.
+3. Verifies atom count and atom symbols match in the same order.
+4. Requires a full RDKit graph match with chirality enabled.
+5. Removes translation and computes the optimal proper rotation using Horn's quaternion RMSD formulation.
+6. Classifies conformers as duplicates only when chemistry and stereochemistry match and RMSD is less than or equal to the tolerance.
 
 This is the fastest and safest mode when conformers came from the same molecule file or workflow and atom ordering is preserved.
 
-### XYZ Graph-Aware Reordering From Inferred Bonds
+### RDKit XYZ Graph-Aware Reordering
 
 `conformer_deduplicate --allow-reorder` supports XYZ files whose atoms are not in the same order.
 
 For each comparison, the code:
 
 1. Verifies the two conformers have the same element counts.
-2. Infers a molecular graph from covalent radii and interatomic distances.
-3. Builds atom signatures from element, degree, and sorted neighbor elements.
-4. Searches only graph-preserving atom mappings.
-5. Computes aligned RMSD for each graph-allowed mapping.
-6. Uses the lowest RMSD mapping for duplicate detection.
+2. Uses RDKit `DetermineBonds` to infer full molecular graphs from XYZ coordinates.
+3. Uses RDKit substructure matching to enumerate topology-preserving atom mappings.
+4. Chooses the lowest-RMSD topology mapping to normalize atom order.
+5. Performs a second RDKit match with chirality enabled during duplicate classification.
+6. Keeps opposite tetrahedral or double-bond stereoisomers as distinct records.
 
-This mode is useful for XYZ-only data, but inferred connectivity is still a heuristic. Symmetric molecules or many repeated atoms can produce multiple valid graph mappings; the tool keeps the mapping with the lowest aligned RMSD. If mapping search becomes too large, increase `--max-mappings` or use the RDKit path with explicit connectivity.
+Topology normalization intentionally ignores stereochemistry so stereoisomers can share a consistent atom order. Duplicate classification does not ignore stereochemistry.
 
 ### RDKit Graph-Aware Deduplication
 
-`deduplicate_rdkit.py` is the preferred path when you have SDF/MOL-style connectivity.
+`deduplicate_rdkit.py` remains available for SDF/MOL inputs that already contain explicit connectivity.
 
 For each molecule, the script:
 
@@ -54,23 +55,32 @@ This is slower than the fixed-order C++ path, but it is chemically safer when at
 
 ## Build
 
-From the package root:
+The C++ tools require RDKit C++ development headers/libraries, pybind11 headers for the Python extension, and the RDKit `DetermineBonds` module.
 
 ```bash
-g++ -O3 -std=c++17 -Wall -Wextra -pedantic src/conformer_identical.cpp -o src/conformer_identical
-g++ -O3 -std=c++17 -Wall -Wextra -pedantic src/conformer_deduplicate.cpp -o src/conformer_deduplicate
+sudo apt-get install cmake g++ librdkit-dev pybind11-dev python3-dev
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-The RDKit script uses the existing local Python environment:
+Some packaged RDKit builds, including Debian's, omit the `DetermineBonds` library and header. Use a matching RDKit source checkout in that case:
 
 ```bash
-./conformer_toolkit/bin/python -m py_compile src/deduplicate_rdkit.py
+git clone --depth 1 --branch Release_2025_03_1 https://github.com/rdkit/rdkit.git /path/to/rdkit-source
+cmake -S . -B build \
+  -DRDKIT_ROOT=/usr \
+  -DRDKIT_SOURCE_ROOT=/path/to/rdkit-source \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
 ```
 
-Build the Python extension for the C++ `Conformer_Batch` API:
+For a non-system RDKit installation, set `RDKIT_ROOT` to its prefix. The helper builds the Python extension through the same CMake configuration:
 
 ```bash
-./conformer_toolkit/bin/python src/build_pybind.py
+python3 src/build_pybind.py \
+  --rdkit-root /path/to/rdkit-prefix \
+  --rdkit-source-root /path/to/matching-rdkit-source
 ```
 
 ## Usage
@@ -96,6 +106,7 @@ batch = Conformer_Batch.from_xyz_files([
 result = batch.remove_duplicates(
     tolerance=0.001,
     run_index_cleanup=True,
+    charge=0,
 )
 
 print(len(result.unique), len(result.duplicates))
@@ -113,7 +124,7 @@ batch = Conformer_Batch.from_multi_xyz("conformers.xyz")
 Run index cleanup on its own:
 
 ```python
-batch.index_cleanup(max_mappings=1_000_000, bond_scale=1.1)
+batch.index_cleanup(max_mappings=1_000_000, bond_scale=1.3, charge=0)
 batch.write_records("cleaned_xyz", "cleaned")
 ```
 
@@ -122,6 +133,7 @@ batch.write_records("cleaned_xyz", "cleaned")
 ```bash
 src/conformer_identical conformer_a.xyz conformer_b.xyz
 src/conformer_identical conformer_a.xyz conformer_b.xyz 0.0005
+src/conformer_identical conformer_a.xyz conformer_b.xyz --charge -1
 ```
 
 Default tolerance is `1e-3` Angstrom.
@@ -181,13 +193,14 @@ src/conformer_deduplicate --allow-reorder --write-cleaned cleaned_xyz --write-un
 Control inferred bonding and mapping search:
 
 ```bash
-src/conformer_deduplicate --allow-reorder --bond-scale 1.1 conformer_*.xyz
+src/conformer_deduplicate --allow-reorder --bond-scale 1.3 conformer_*.xyz
 src/conformer_deduplicate --allow-reorder --max-mappings 10000000 conformer_*.xyz
+src/conformer_deduplicate --allow-reorder --charge 1 conformer_*.xyz
 ```
 
-`--bond-scale` multiplies the sum of covalent radii to decide whether two atoms are bonded. The default is `1.1`.
+`--bond-scale` is passed to RDKit `DetermineBonds` as the covalent-radius multiplier. The default is `1.3`.
 
-Use this when you have XYZ files and no explicit connectivity. For symmetric, charged, organometallic, or unusual bonding cases, prefer RDKit with SDF input.
+XYZ does not encode total molecular charge. `--charge` therefore defaults to `0` and must be provided for ions. One charge value applies to the complete input batch.
 
 ### Deduplicate SDF With RDKit
 
@@ -234,11 +247,12 @@ In the local ethanol test, the C++ fixed-order loop was about 9x faster than `rd
 
 ## Limitations
 
-- XYZ files do not contain reliable connectivity. The C++ reorder mode infers bonds from distances, which can be wrong for unusual bonding.
-- The C++ tools compare conformers by RMSD only; they do not check molecular charge, bond order, stereochemistry, or energy.
-- `--allow-reorder` performs exhaustive graph-compatible mapping search and can become expensive for highly symmetric molecules.
-- When multiple graph-compatible mappings exist, the C++ reorder mode chooses the lowest-RMSD mapping.
-- RDKit graph-aware mode requires inputs that RDKit can parse with connectivity, such as SDF/MOL.
+- XYZ files do not encode bonds, bond orders, formal charges, isotopes, or stereo annotations. RDKit reconstructs these from coordinates and the supplied total charge, so unusual, organometallic, highly distorted, or ambiguous structures can still be misassigned.
+- Total charge cannot be inferred reliably from XYZ and must be passed with `--charge`.
+- Stereo comparison is only as reliable as RDKit's inferred graph and 3D stereo assignment. Nearly planar or otherwise geometrically ambiguous centers may remain unspecified.
+- `--allow-reorder` can become expensive for highly symmetric molecules. `--max-mappings` bounds RDKit's match enumeration.
+- When multiple topology-compatible mappings exist, index cleanup chooses the lowest-RMSD mapping; duplicate classification subsequently requires stereochemistry to match.
+- The C++ tools do not compare conformer energies.
 
 ## Source Debug Notes
 

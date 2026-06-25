@@ -1,47 +1,42 @@
 #!/usr/bin/env python3
-"""Build the pybind11 extension for the C++ conformer batch API."""
+"""Configure and build the RDKit-backed C++ tools and pybind11 extension."""
 
 from __future__ import annotations
 
-import shlex
+import argparse
+import os
 import subprocess
-import sys
-import sysconfig
 from pathlib import Path
-
-import pybind11
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--build-dir", type=Path, default=Path("build"))
+    parser.add_argument("--rdkit-root", type=Path, default=os.environ.get("RDKIT_ROOT"))
+    parser.add_argument("--rdkit-source-root", type=Path, default=os.environ.get("RDKIT_SOURCE_ROOT"))
+    args = parser.parse_args()
+
     root = Path(__file__).resolve().parents[1]
-    src = root / "src" / "conformer_toolkit_bindings.cpp"
-    suffix = sysconfig.get_config_var("EXT_SUFFIX")
-    if not suffix:
-        raise RuntimeError("Python did not report an extension suffix")
-
-    output = root / "src" / f"conformer_toolkit_cpp{suffix}"
-    python_include = sysconfig.get_paths()["include"]
-
-    # Keep this command explicit so build failures are easy to copy, inspect,
-    # and rerun outside the helper.
-    cmd = [
-        "g++",
-        "-O3",
-        "-std=c++17",
-        "-Wall",
-        "-Wextra",
-        "-shared",
-        "-fPIC",
-        f"-I{python_include}",
-        f"-I{pybind11.get_include()}",
-        str(src),
-        "-o",
-        str(output),
+    build_dir = args.build_dir.resolve()
+    configure = [
+        "cmake",
+        "-S",
+        str(root),
+        "-B",
+        str(build_dir),
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DBUILD_PYTHON_BINDINGS=ON",
     ]
+    if args.rdkit_root:
+        configure.append(f"-DRDKIT_ROOT={args.rdkit_root.resolve()}")
+    if args.rdkit_source_root:
+        configure.append(f"-DRDKIT_SOURCE_ROOT={args.rdkit_source_root.resolve()}")
 
-    print(" ".join(shlex.quote(part) for part in cmd))
-    subprocess.run(cmd, check=True)
-    print(output)
+    subprocess.run(configure, check=True)
+    subprocess.run(
+        ["cmake", "--build", str(build_dir), "--parallel", "--target", "conformer_toolkit_cpp"],
+        check=True,
+    )
     return 0
 
 
