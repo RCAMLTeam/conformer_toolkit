@@ -173,7 +173,7 @@ static double covalent_radius(const std::string& symbol) {
     if (symbol == "Zn") return 1.22;
     if (symbol == "Fe") return 1.32;
     if (symbol == "Cu") return 1.32;
-    return 0.77;
+    throw std::runtime_error("Covalent radius not defined for element: " + symbol);
 }
 
 static double distance(const Vec3& a, const Vec3& b) {
