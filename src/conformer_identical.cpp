@@ -79,7 +79,7 @@ int main(int argc, char** argv) {
         double rmsd = 0.0;
         const auto start = std::chrono::steady_clock::now();
         for (std::size_t i = 0; i < repeat; ++i) {
-            rmsd = aligned_rmsd(a, b);
+            rmsd = rdkit_aligned_rmsd(a, b, bond_scale, charge);
         }
         const auto stop = std::chrono::steady_clock::now();
         const std::chrono::duration<double> elapsed = stop - start;

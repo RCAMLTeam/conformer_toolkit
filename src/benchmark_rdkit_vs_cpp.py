@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark conformer_identical against RDKit rdMolAlign.GetBestRMS."""
+"""Benchmark the C++ command path against Python RDKit GetBestRMS."""
 
 from __future__ import annotations
 
@@ -76,8 +76,8 @@ def main() -> int:
     )
     cpp_avg_us = parse_avg_microseconds(cpp.stdout)
 
-    # RDKit does graph/symmetry work in GetBestRMS, so this benchmark measures
-    # fixed-order RMSD speed versus a more general chemistry-aware operation.
+    # conformer_identical uses RDKit C++ with an explicit atom map. GetBestRMS
+    # uses Python RDKit and also considers symmetry-equivalent mappings.
     start = time.perf_counter()
     rmsd = 0.0
     for _ in range(args.repeat):
@@ -88,9 +88,9 @@ def main() -> int:
     print(f"repeat {args.repeat}")
     print(f"rdkit_version {Chem.rdBase.rdkitVersion}")
     print(f"molecule ethanol_explicit_h atoms {mol1.GetNumAtoms()}")
-    print(f"cpp_avg_microseconds {cpp_avg_us:.6f}")
-    print(f"rdkit_getbestrms_avg_microseconds {rdkit_avg_us:.6f}")
-    print(f"ratio_rdkit_over_cpp {rdkit_avg_us / cpp_avg_us:.3f}")
+    print(f"cpp_command_rdkit_alignmol_avg_microseconds {cpp_avg_us:.6f}")
+    print(f"python_rdkit_getbestrms_avg_microseconds {rdkit_avg_us:.6f}")
+    print(f"ratio_python_getbestrms_over_cpp_command {rdkit_avg_us / cpp_avg_us:.3f}")
     print(f"rdkit_rmsd_angstrom {rmsd:.10f}")
     print("cpp_output_begin")
     print(cpp.stdout.strip())

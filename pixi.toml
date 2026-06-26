@@ -1,0 +1,26 @@
+[workspace]
+authors = ["AlanHe <he494165@gmail.com>"]
+channels = ["conda-forge"]
+name = "conformer_toolkit"
+platforms = ["linux-aarch64"]
+version = "0.1.0"
+
+[tasks]
+configure = "cmake -S . -B build-pixi -DCMAKE_BUILD_TYPE=Release -DRDKIT_ROOT=$CONDA_PREFIX"
+build = { cmd = "cmake --build build-pixi --parallel", depends-on = ["configure"] }
+test = { cmd = "ctest --test-dir build-pixi --output-on-failure", depends-on = ["build"] }
+python-smoke = "PYTHONPATH=src python -c \"from conformer_toolkit_cpp import Conformer_Group; from knn_k_optimizer import KNNKOptimizer; import numpy as np; group = Conformer_Group.from_xyz_files(['src/testdata/benzene_ordered.xyz']); group.detect_rings(); assert len(group.rings()) == 1; matrix = np.array([[0.0, 1.0], [1.0, 0.0]]); assert KNNKOptimizer(matrix).optimize().connected; print('python smoke passed')\""
+smoke = { depends-on = ["test", "python-smoke"] }
+
+[dependencies]
+cmake = "*"
+cxx-compiler = "*"
+make = "*"
+numpy = "*"
+pybind11 = "*"
+python = "3.10.*"
+rdkit = "*"
+librdkit-dev = "*"
+libboost-devel = "1.90.*"
+ipykernel = ">=7.3.0,<8"
+notebook = ">=7.6.0,<8"

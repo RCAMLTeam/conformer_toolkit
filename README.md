@@ -21,6 +21,7 @@ executables and the optional Python extension to `src/`.
     ├── conformer_identical.cpp
     ├── conformer_toolkit_bindings.cpp
     ├── deduplicate_rdkit.py
+    ├── knn_k_optimizer.py
     └── testdata/
 ```
 
@@ -36,10 +37,10 @@ For each comparison, the code:
 2. Uses RDKit `DetermineBonds`/xyz2mol to infer connectivity, bond orders, formal charges, and 3D stereochemistry.
 3. Verifies atom count and atom symbols match in the same order.
 4. Requires a full RDKit graph match with chirality enabled.
-5. Removes translation and computes the optimal proper rotation using Horn's quaternion RMSD formulation.
+5. Uses RDKit `MolAlign::alignMol` with an explicit same-index atom map to compute the optimal aligned RMSD.
 6. Classifies conformers as duplicates only when chemistry and stereochemistry match and RMSD is less than or equal to the tolerance.
 
-This is the fastest and safest mode when conformers came from the same molecule file or workflow and atom ordering is preserved.
+This is the simplest mode when conformers came from the same molecule file or workflow and atom ordering is preserved.
 
 ### RDKit XYZ Graph-Aware Reordering
 
@@ -68,11 +69,33 @@ For each molecule, the script:
 4. Compares conformers with `rdMolAlign.GetBestRMS`.
 5. Keeps the first representative of each unique conformer group.
 
-This is slower than the fixed-order C++ path, but it is chemically safer when atom order is inconsistent.
+This remains available when SDF/MOL inputs already carry explicit connectivity.
+
+### KNN K Optimization
+
+`knn_k_optimizer.py` selects K for a conformer KNN graph from a precomputed NumPy RMSD matrix. It builds undirected one-way or mutual KNN graphs, tests K from `2` to `min(N - 1, 50)`, and uses Union-Find to return the smallest K that yields a connected graph. Each tested K records connectivity, component count, edge count, average edge RMSD, and Strategy 4 scoring inputs.
 
 ## Build
 
-The C++ tools require RDKit C++ development headers/libraries, pybind11 headers for the Python extension, and the RDKit `DetermineBonds` module.
+The recommended build path uses Pixi, which installs Python, NumPy, RDKit, RDKit C++ headers/libraries, pybind11, CMake, and the compiler toolchain from conda-forge:
+
+```bash
+pixi install
+pixi run smoke
+```
+
+Useful Pixi tasks:
+
+```bash
+pixi run configure
+pixi run build
+pixi run test
+pixi run python-smoke
+```
+
+Pixi builds into `build-pixi/` and writes the command-line tools plus Python extension to `src/`.
+
+The manual system build path requires a C++20-capable compiler, RDKit C++ development headers/libraries, pybind11 headers for the Python extension, and the RDKit `DetermineBonds` module.
 
 ```bash
 sudo apt-get install cmake g++ librdkit-dev pybind11-dev python3-dev
@@ -181,6 +204,10 @@ group = Conformer_Group.from_xyz_files([
 ])
 group.detect_rings(charge=0)
 
+print("molecule adjacency:")
+for atom, neighbors in enumerate(group.adjacency_table()):
+    print(atom, list(neighbors))
+
 print(len(group), len(group.rings()))
 for ring in group.rings():
     print("ring atoms:", list(ring.atoms))
@@ -188,10 +215,12 @@ for ring in group.rings():
         print(atom_adjacency.atom, list(atom_adjacency.adjacent_atoms))
 ```
 
-`detect_rings` infers chemistry from the first conformer with RDKit `RingInfo`. Each stored `Ring_Record` contains:
+`detect_rings` infers chemistry from the first conformer with RDKit. Because all conformers in a `Conformer_Group` are expected to share connectivity, the inferred bonds from conformer 0 are also stored as the group-level `adjacency_table()`.
+
+Each stored `Ring_Record` contains:
 
 - `atoms`: RDKit's ordered atom indices for the ring.
-- `adjacency_list`: one `Ring_Atom_Adjacency` per ring atom, where `atom` is the atom index and `adjacent_atoms` contains its previous and next ring neighbors.
+- `adjacency_list`: one `Ring_Atom_Adjacency` per ring atom, where `atom` is the atom index and `adjacent_atoms` contains the previous and next ring neighbors followed by any directly bonded non-ring atoms.
 
 Run index cleanup on its own:
 
@@ -199,6 +228,38 @@ Run index cleanup on its own:
 batch.index_cleanup(max_mappings=1_000_000, bond_scale=1.3, charge=0)
 batch.write_records("cleaned_xyz", "cleaned")
 ```
+
+### KNN Graph K Optimization
+
+Use `KNNKOptimizer` when you already have a precomputed `N x N` NumPy RMSD matrix and need the smallest K that produces a connected conformer graph:
+
+```python
+import numpy as np
+from knn_k_optimizer import KNNKOptimizer
+
+rmsd_matrix = np.load("conformer_rmsd.npy")
+optimizer = KNNKOptimizer(rmsd_matrix)
+
+result = optimizer.optimize()
+print(result.optimal_k, result.connected)
+print(result.edge_count, result.avg_edge_weight)
+
+graph = optimizer.build_graph(result.optimal_k)
+print(graph.edges)
+
+for diagnostic in result.diagnostics:
+    print(
+        diagnostic.k,
+        diagnostic.connected,
+        diagnostic.n_components,
+        diagnostic.edge_count,
+        diagnostic.avg_edge_weight,
+    )
+```
+
+By default, an undirected edge is added when either conformer selects the other among its K nearest neighbors. Pass `edge_mode="mutual"` to require reciprocal neighbor selection. The optimizer tests K from `2` to `min(N - 1, 50)` and uses Union-Find for connectivity checks.
+
+`KDiagnostic` also includes `connectivity_score` and `stability_score`, and `KNNKOptimizer.strategy4_score(...)` is provided as a future Strategy 4 hook where alpha should dominate connectivity, beta penalizes average RMSD, and gamma rewards neighbor-set stability.
 
 ### Compare Two Ordered XYZ Conformers
 
@@ -309,13 +370,13 @@ duplicate input_index 1 path conformer_002.xyz representative_input_index 0 repr
 
 ## Benchmark
 
-Benchmark the C++ fixed-order RMSD loop against RDKit `GetBestRMS`:
+Benchmark the C++ command-line path against Python RDKit `GetBestRMS`:
 
 ```bash
 python3 src/benchmark_rdkit_vs_cpp.py --repeat 100000
 ```
 
-In the local ethanol test, the C++ fixed-order loop was about 9x faster than `rdMolAlign.GetBestRMS`. RDKit does more chemistry-aware work, so use the faster C++ path only when its atom-order assumptions are valid.
+The C++ path uses RDKit C++ for chemistry inference, graph matching, and aligned RMSD. The Python comparison uses RDKit `rdMolAlign.GetBestRMS`, which also considers symmetry.
 
 ## Limitations
 

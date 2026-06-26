@@ -2,6 +2,7 @@
 .venv/
 .deps/
 build/
+build-pixi/
 third_party/
 venv/
 env/
@@ -36,3 +37,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+# pixi environments
+.pixi/*
+!.pixi/config.toml

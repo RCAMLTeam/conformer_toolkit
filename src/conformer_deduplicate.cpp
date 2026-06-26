@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -16,6 +15,7 @@
 
 #include <GraphMol/DetermineBonds/DetermineBonds.h>
 #include <GraphMol/FileParsers/FileParsers.h>
+#include <GraphMol/MolAlign/AlignMolecules.h>
 #include <GraphMol/MolOps.h>
 #include <GraphMol/RDKitBase.h>
 #include <GraphMol/RingInfo.h>
@@ -129,39 +129,6 @@ static void write_xyz(const std::filesystem::path& path, const Molecule& mol, co
     }
 }
 
-static Vec3 centroid(const std::vector<Vec3>& coords) {
-    Vec3 c;
-    for (const Vec3& v : coords) {
-        c.x += v.x;
-        c.y += v.y;
-        c.z += v.z;
-    }
-
-    const double inv_n = 1.0 / static_cast<double>(coords.size());
-    c.x *= inv_n;
-    c.y *= inv_n;
-    c.z *= inv_n;
-    return c;
-}
-
-static std::vector<Vec3> centered(const std::vector<Vec3>& coords) {
-    const Vec3 c = centroid(coords);
-    std::vector<Vec3> out;
-    out.reserve(coords.size());
-    for (const Vec3& v : coords) {
-        out.push_back({v.x - c.x, v.y - c.y, v.z - c.z});
-    }
-    return out;
-}
-
-static double norm_squared_sum(const std::vector<Vec3>& coords) {
-    double total = 0.0;
-    for (const Vec3& v : coords) {
-        total += v.x * v.x + v.y * v.y + v.z * v.z;
-    }
-    return total;
-}
-
 static std::string xyz_block(const Molecule& mol) {
     std::ostringstream out;
     out << mol.coords.size() << "\n\n";
@@ -256,96 +223,24 @@ static std::vector<std::vector<std::size_t>> chemistry_preserving_mappings(
     return mappings;
 }
 
-static double largest_eigenvalue_symmetric_4x4(const std::array<std::array<double, 4>, 4>& matrix) {
-    std::array<double, 4> q{1.0, 0.0, 0.0, 0.0};
-
-    for (int iter = 0; iter < 100; ++iter) {
-        std::array<double, 4> next{};
-        for (int i = 0; i < 4; ++i) {
-            for (int j = 0; j < 4; ++j) {
-                next[i] += matrix[i][j] * q[j];
-            }
-        }
-
-        double norm = 0.0;
-        for (double value : next) {
-            norm += value * value;
-        }
-        norm = std::sqrt(norm);
-        if (norm == 0.0) {
-            return 0.0;
-        }
-
-        for (double& value : next) {
-            value /= norm;
-        }
-
-        double delta = 0.0;
-        for (int i = 0; i < 4; ++i) {
-            const double diff = next[i] - q[i];
-            delta += diff * diff;
-        }
-        q = next;
-        if (delta < 1e-28) {
-            break;
-        }
-    }
-
-    double eigenvalue = 0.0;
-    for (int i = 0; i < 4; ++i) {
-        double row_dot = 0.0;
-        for (int j = 0; j < 4; ++j) {
-            row_dot += matrix[i][j] * q[j];
-        }
-        eigenvalue += q[i] * row_dot;
-    }
-    return eigenvalue;
-}
-
-static double aligned_rmsd(const Molecule& a, const Molecule& b) {
-    if (a.coords.empty()) {
+static double rdkit_aligned_rmsd(const Molecule& reference, const Molecule& probe, double bond_scale, int charge) {
+    if (reference.coords.empty()) {
         return 0.0;
     }
-
-    // Horn quaternion RMSD after removing translation. This assumes atom i in
-    // both Molecule objects is already the intended mapping.
-    const std::vector<Vec3> p = centered(a.coords);
-    const std::vector<Vec3> q = centered(b.coords);
-
-    double sxx = 0.0;
-    double sxy = 0.0;
-    double sxz = 0.0;
-    double syx = 0.0;
-    double syy = 0.0;
-    double syz = 0.0;
-    double szx = 0.0;
-    double szy = 0.0;
-    double szz = 0.0;
-
-    for (std::size_t i = 0; i < p.size(); ++i) {
-        sxx += p[i].x * q[i].x;
-        sxy += p[i].x * q[i].y;
-        sxz += p[i].x * q[i].z;
-        syx += p[i].y * q[i].x;
-        syy += p[i].y * q[i].y;
-        syz += p[i].y * q[i].z;
-        szx += p[i].z * q[i].x;
-        szy += p[i].z * q[i].y;
-        szz += p[i].z * q[i].z;
+    if (reference.coords.size() != probe.coords.size()) {
+        throw std::runtime_error("Atom count differs during RDKit RMSD comparison");
     }
 
-    const double trace = sxx + syy + szz;
-    const std::array<std::array<double, 4>, 4> horn{{
-        {{trace, syz - szy, szx - sxz, sxy - syx}},
-        {{syz - szy, sxx - syy - szz, sxy + syx, szx + sxz}},
-        {{szx - sxz, sxy + syx, -sxx + syy - szz, syz + szy}},
-        {{sxy - syx, szx + sxz, syz + szy, -sxx - syy + szz}},
-    }};
+    const std::unique_ptr<RDKit::RWMol> reference_mol = chemistry_from_xyz(reference, bond_scale, charge);
+    std::unique_ptr<RDKit::RWMol> probe_mol = chemistry_from_xyz(probe, bond_scale, charge);
 
-    const double max_eval = largest_eigenvalue_symmetric_4x4(horn);
-    const double squared = std::max(0.0, (norm_squared_sum(p) + norm_squared_sum(q) - 2.0 * max_eval) /
-                                           static_cast<double>(p.size()));
-    return std::sqrt(squared);
+    RDKit::MatchVectType atom_map;
+    atom_map.reserve(reference.coords.size());
+    for (std::size_t i = 0; i < reference.coords.size(); ++i) {
+        atom_map.emplace_back(static_cast<int>(i), static_cast<int>(i));
+    }
+
+    return RDKit::MolAlign::alignMol(*probe_mol, *reference_mol, -1, -1, &atom_map);
 }
 
 static Molecule reordered_molecule(const Molecule& target, const std::vector<std::size_t>& mapping) {
@@ -376,7 +271,7 @@ static RmsdMatch best_graph_preserving_reordered_rmsd(
         chemistry_preserving_mappings(reference, target, max_mappings, bond_scale, charge, use_chirality);
     for (const std::vector<std::size_t>& mapping : mappings) {
         const Molecule reordered = reordered_molecule(target, mapping);
-        const double rmsd = aligned_rmsd(reference, reordered);
+        const double rmsd = rdkit_aligned_rmsd(reference, reordered, bond_scale, charge);
         ++match.mappings_checked;
         if (rmsd < match.best) {
             match.second = match.best;
@@ -503,6 +398,10 @@ public:
         return rings_;
     }
 
+    const std::vector<std::vector<std::size_t>>& adjacency_table() const {
+        return adjacency_table_;
+    }
+
     void index_cleanup(std::size_t max_mappings, double bond_scale, double ambiguity_gap, int charge = 0) {
         // Reorder every conformer to match the first conformer's atom indexing.
         // This method is intentionally public because callers may want a cleaned
@@ -564,7 +463,7 @@ public:
                 if (chemistry_matches.empty()) {
                     continue;
                 }
-                const double rmsd = aligned_rmsd(candidate.mol, record.mol);
+                const double rmsd = rdkit_aligned_rmsd(candidate.mol, record.mol, bond_scale, charge);
                 if (rmsd < best_rmsd) {
                     best_rmsd = rmsd;
                     best = &candidate;
@@ -591,11 +490,13 @@ public:
 
     void detect_rings(double bond_scale = 1.3, int charge = 0) {
         rings_.clear();
+        adjacency_table_.clear();
         if (records_.empty()) {
             return;
         }
 
         const std::unique_ptr<RDKit::RWMol> rd_mol = chemistry_from_xyz(records_.front().mol, bond_scale, charge);
+        adjacency_table_ = build_adjacency_table(*rd_mol);
         const RDKit::RingInfo* ring_info = rd_mol->getRingInfo();
         if (ring_info == nullptr) {
             return;
@@ -617,6 +518,14 @@ public:
                 if (ring.atoms.size() > 1) {
                     adjacency.adjacent_atoms.push_back(ring.atoms[(i + ring.atoms.size() - 1) % ring.atoms.size()]);
                     adjacency.adjacent_atoms.push_back(ring.atoms[(i + 1) % ring.atoms.size()]);
+                }
+                for (const std::size_t neighbor : adjacency_table_.at(adjacency.atom)) {
+                    if (
+                        std::find(adjacency.adjacent_atoms.begin(), adjacency.adjacent_atoms.end(), neighbor) ==
+                        adjacency.adjacent_atoms.end()
+                    ) {
+                        adjacency.adjacent_atoms.push_back(neighbor);
+                    }
                 }
                 ring.adjacency_list.push_back(std::move(adjacency));
             }
@@ -646,8 +555,23 @@ private:
         // mappings. That is acceptable here: keep the lowest-RMSD mapping found.
     }
 
+    static std::vector<std::vector<std::size_t>> build_adjacency_table(const RDKit::ROMol& rd_mol) {
+        std::vector<std::vector<std::size_t>> adjacency(rd_mol.getNumAtoms());
+        for (const RDKit::Bond* bond : rd_mol.bonds()) {
+            const std::size_t begin = static_cast<std::size_t>(bond->getBeginAtomIdx());
+            const std::size_t end = static_cast<std::size_t>(bond->getEndAtomIdx());
+            adjacency.at(begin).push_back(end);
+            adjacency.at(end).push_back(begin);
+        }
+        for (std::vector<std::size_t>& neighbors : adjacency) {
+            std::sort(neighbors.begin(), neighbors.end());
+        }
+        return adjacency;
+    }
+
     std::vector<Conformer_Record> records_;
     std::vector<Ring_Record> rings_;
+    std::vector<std::vector<std::size_t>> adjacency_table_;
 };
 
 #ifndef CONFORMER_TOOLKIT_NO_MAIN

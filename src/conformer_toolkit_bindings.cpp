@@ -41,7 +41,7 @@ PYBIND11_MODULE(conformer_toolkit_cpp, m) {
     py::class_<Ring_Atom_Adjacency>(
         m,
         "Ring_Atom_Adjacency",
-        "Ring-local adjacency for one atom. adjacent_atoms contains the previous and next atoms on the ordered ring."
+        "Adjacency for one ring atom. adjacent_atoms contains ring neighbors and directly bonded non-ring atoms."
     )
         .def_readonly("atom", &Ring_Atom_Adjacency::atom)
         .def_readonly("adjacent_atoms", &Ring_Atom_Adjacency::adjacent_atoms);
@@ -49,7 +49,7 @@ PYBIND11_MODULE(conformer_toolkit_cpp, m) {
     py::class_<Ring_Record>(
         m,
         "Ring_Record",
-        "One detected ring, with spatially ordered atom indices and per-atom ring adjacency."
+        "One detected ring, with spatially ordered atom indices and per-atom molecule adjacency."
     )
         .def_readonly("atoms", &Ring_Record::atoms)
         .def_readonly("adjacency_list", &Ring_Record::adjacency_list);
@@ -129,11 +129,17 @@ PYBIND11_MODULE(conformer_toolkit_cpp, m) {
             "Return ring records populated by detect_rings()."
         )
         .def(
+            "adjacency_table",
+            &Conformer_Group::adjacency_table,
+            py::return_value_policy::reference_internal,
+            "Return the molecule adjacency table inferred from conformer 0 by detect_rings()."
+        )
+        .def(
             "detect_rings",
             &Conformer_Group::detect_rings,
             py::arg("bond_scale") = 1.3,
             py::arg("charge") = 0,
-            "Infer chemistry with RDKit from the first conformer and store ring information."
+            "Infer chemistry with RDKit from the first conformer and store adjacency/ring information."
         );
 
     m.attr("Conformer_Batch") = m.attr("Conformer_Group");

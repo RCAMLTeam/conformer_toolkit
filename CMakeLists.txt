@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 project(conformer_toolkit LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -37,6 +37,7 @@ endfunction()
 find_rdkit_library(RDKIT_FILEPARSERS FileParsers)
 find_rdkit_library(RDKIT_SUBSTRUCTMATCH SubstructMatch)
 find_rdkit_library(RDKIT_GRAPHMOL GraphMol)
+find_rdkit_library(RDKIT_MOLALIGN MolAlign)
 find_rdkit_library(RDKIT_GEOMETRY RDGeometryLib)
 find_rdkit_library(RDKIT_GENERAL RDGeneral)
 
@@ -44,6 +45,7 @@ set(RDKIT_LIBRARIES
     ${RDKIT_FILEPARSERS}
     ${RDKIT_SUBSTRUCTMATCH}
     ${RDKIT_GRAPHMOL}
+    ${RDKIT_MOLALIGN}
     ${RDKIT_GEOMETRY}
     ${RDKIT_GENERAL}
 )
