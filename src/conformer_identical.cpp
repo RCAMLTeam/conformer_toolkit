@@ -58,8 +58,8 @@ int main(int argc, char** argv) {
             throw std::runtime_error("--bond-scale must be greater than zero");
         }
 
-        const Conformer_Batch a_batch = Conformer_Batch::from_xyz_files({argv[1]});
-        const Conformer_Batch b_batch = Conformer_Batch::from_xyz_files({argv[2]});
+        const Conformer_Group a_batch = Conformer_Group::from_xyz_files({argv[1]});
+        const Conformer_Group b_batch = Conformer_Group::from_xyz_files({argv[2]});
         const Molecule& a = a_batch.records().front().mol;
         const Molecule& b = b_batch.records().front().mol;
 

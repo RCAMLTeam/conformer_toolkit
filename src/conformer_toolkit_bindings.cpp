@@ -7,7 +7,7 @@
 namespace py = pybind11;
 
 PYBIND11_MODULE(conformer_toolkit_cpp, m) {
-    m.doc() = "pybind11 interface for Conformer_Batch C++ conformer deduplication";
+    m.doc() = "pybind11 interface for C++ conformer deduplication and molecule ring analysis";
 
     py::class_<Vec3>(m, "Vec3")
         .def(py::init<>())
@@ -38,52 +38,103 @@ PYBIND11_MODULE(conformer_toolkit_cpp, m) {
         .def_readonly("representative_path", &DuplicateEntry::representative_path)
         .def_readonly("rmsd", &DuplicateEntry::rmsd);
 
-    py::class_<Conformer_Batch::Remove_Duplicates_Result>(m, "Remove_Duplicates_Result")
-        .def_readonly("unique", &Conformer_Batch::Remove_Duplicates_Result::unique)
-        .def_readonly("duplicates", &Conformer_Batch::Remove_Duplicates_Result::duplicates);
+    py::class_<Ring_Atom_Adjacency>(
+        m,
+        "Ring_Atom_Adjacency",
+        "Ring-local adjacency for one atom. adjacent_atoms contains the previous and next atoms on the ordered ring."
+    )
+        .def_readonly("atom", &Ring_Atom_Adjacency::atom)
+        .def_readonly("adjacent_atoms", &Ring_Atom_Adjacency::adjacent_atoms);
 
-    py::class_<Conformer_Batch>(m, "Conformer_Batch")
-        .def_static("from_xyz_files", &Conformer_Batch::from_xyz_files, py::arg("paths"))
+    py::class_<Ring_Record>(
+        m,
+        "Ring_Record",
+        "One detected ring, with spatially ordered atom indices and per-atom ring adjacency."
+    )
+        .def_readonly("atoms", &Ring_Record::atoms)
+        .def_readonly("adjacency_list", &Ring_Record::adjacency_list);
+
+    py::class_<Conformer_Group::Remove_Duplicates_Result>(m, "Remove_Duplicates_Result")
+        .def_readonly("unique", &Conformer_Group::Remove_Duplicates_Result::unique)
+        .def_readonly("duplicates", &Conformer_Group::Remove_Duplicates_Result::duplicates);
+
+    py::class_<Conformer_Group>(
+        m,
+        "Conformer_Group",
+        "Container for conformers of one molecule, with deduplication and RDKit-derived ring information."
+    )
+        .def_static(
+            "from_xyz_files",
+            &Conformer_Group::from_xyz_files,
+            py::arg("paths"),
+            "Load one conformer from each XYZ file path."
+        )
         .def_static(
             "from_xyz_directory",
             [](const std::string& directory) {
-                return Conformer_Batch::from_xyz_directory(directory);
+                return Conformer_Group::from_xyz_directory(directory);
             },
-            py::arg("directory")
+            py::arg("directory"),
+            "Load all .xyz files in a directory, sorted by path."
         )
         .def_static(
             "from_multi_xyz",
             [](const std::string& path) {
-                return Conformer_Batch::from_multi_xyz(path);
+                return Conformer_Group::from_multi_xyz(path);
             },
-            py::arg("path")
+            py::arg("path"),
+            "Load conformers from a concatenated multi-XYZ file."
         )
-        .def("size", &Conformer_Batch::size)
-        .def("records", &Conformer_Batch::records, py::return_value_policy::reference_internal)
+        .def("size", &Conformer_Group::size)
+        .def("__len__", &Conformer_Group::size)
+        .def(
+            "records",
+            &Conformer_Group::records,
+            py::return_value_policy::reference_internal,
+            "Return stored conformer records."
+        )
         .def(
             "index_cleanup",
-            &Conformer_Batch::index_cleanup,
+            &Conformer_Group::index_cleanup,
             py::arg("max_mappings") = 1000000,
             py::arg("bond_scale") = 1.3,
             py::arg("ambiguity_gap") = 1e-6,
-            py::arg("charge") = 0
+            py::arg("charge") = 0,
+            "Normalize all conformers to the atom indexing of the first conformer."
         )
         .def(
             "remove_duplicates",
-            &Conformer_Batch::remove_duplicates,
+            &Conformer_Group::remove_duplicates,
             py::arg("tolerance") = 1e-3,
             py::arg("run_index_cleanup") = false,
             py::arg("max_mappings") = 1000000,
             py::arg("bond_scale") = 1.3,
             py::arg("ambiguity_gap") = 1e-6,
-            py::arg("charge") = 0
+            py::arg("charge") = 0,
+            "Remove duplicate conformers by chemistry-aware RMSD comparison."
         )
         .def(
             "write_records",
-            [](const Conformer_Batch& batch, const std::string& outdir, const std::string& prefix) {
-                batch.write_records(outdir, prefix);
+            [](const Conformer_Group& group, const std::string& outdir, const std::string& prefix) {
+                group.write_records(outdir, prefix);
             },
             py::arg("outdir"),
-            py::arg("prefix") = "cleaned"
+            py::arg("prefix") = "cleaned",
+            "Write the currently stored conformer records as XYZ files."
+        )
+        .def(
+            "rings",
+            &Conformer_Group::rings,
+            py::return_value_policy::reference_internal,
+            "Return ring records populated by detect_rings()."
+        )
+        .def(
+            "detect_rings",
+            &Conformer_Group::detect_rings,
+            py::arg("bond_scale") = 1.3,
+            py::arg("charge") = 0,
+            "Infer chemistry with RDKit from the first conformer and store ring information."
         );
+
+    m.attr("Conformer_Batch") = m.attr("Conformer_Group");
 }

@@ -18,6 +18,7 @@
 #include <GraphMol/FileParsers/FileParsers.h>
 #include <GraphMol/MolOps.h>
 #include <GraphMol/RDKitBase.h>
+#include <GraphMol/RingInfo.h>
 #include <GraphMol/Substruct/SubstructMatch.h>
 
 struct Vec3 {
@@ -50,6 +51,16 @@ struct DuplicateEntry {
     std::size_t representative_input_index{};
     std::string representative_path;
     double rmsd{};
+};
+
+struct Ring_Atom_Adjacency {
+    std::size_t atom{};
+    std::vector<std::size_t> adjacent_atoms;
+};
+
+struct Ring_Record {
+    std::vector<std::size_t> atoms;
+    std::vector<Ring_Atom_Adjacency> adjacency_list;
 };
 
 struct RmsdMatch {
@@ -406,17 +417,17 @@ static void assert_same_formula(const Molecule& reference, const Molecule& mol, 
     }
 }
 
-class Conformer_Batch {
+class Conformer_Group {
 public:
     struct Remove_Duplicates_Result {
         std::vector<UniqueEntry> unique;
         std::vector<DuplicateEntry> duplicates;
     };
 
-    static Conformer_Batch from_xyz_files(const std::vector<std::string>& paths) {
+    static Conformer_Group from_xyz_files(const std::vector<std::string>& paths) {
         // Loader 1a: explicit single-XYZ files. Each file contributes one
         // conformer record and keeps its path as the source label.
-        Conformer_Batch batch;
+        Conformer_Group batch;
         for (const std::string& path : paths) {
             std::ifstream in(path);
             if (!in) {
@@ -432,7 +443,7 @@ public:
         return batch;
     }
 
-    static Conformer_Batch from_xyz_directory(const std::filesystem::path& directory) {
+    static Conformer_Group from_xyz_directory(const std::filesystem::path& directory) {
         // Loader 1b: all .xyz files under a directory, sorted for reproducible
         // representative selection.
         if (!std::filesystem::is_directory(directory)) {
@@ -455,7 +466,7 @@ public:
         return from_xyz_files(paths);
     }
 
-    static Conformer_Batch from_multi_xyz(const std::filesystem::path& path) {
+    static Conformer_Group from_multi_xyz(const std::filesystem::path& path) {
         // Loader 2: concatenated multi-XYZ. Source labels use file#record_index
         // so duplicate reports can point back to the original record.
         std::ifstream in(path);
@@ -463,7 +474,7 @@ public:
             throw std::runtime_error("Could not open multi-XYZ file: " + path.string());
         }
 
-        Conformer_Batch batch;
+        Conformer_Group batch;
         while (true) {
             Molecule mol;
             std::string comment;
@@ -486,6 +497,10 @@ public:
 
     const std::vector<Conformer_Record>& records() const {
         return records_;
+    }
+
+    const std::vector<Ring_Record>& rings() const {
+        return rings_;
     }
 
     void index_cleanup(std::size_t max_mappings, double bond_scale, double ambiguity_gap, int charge = 0) {
@@ -574,6 +589,42 @@ public:
         }
     }
 
+    void detect_rings(double bond_scale = 1.3, int charge = 0) {
+        rings_.clear();
+        if (records_.empty()) {
+            return;
+        }
+
+        const std::unique_ptr<RDKit::RWMol> rd_mol = chemistry_from_xyz(records_.front().mol, bond_scale, charge);
+        const RDKit::RingInfo* ring_info = rd_mol->getRingInfo();
+        if (ring_info == nullptr) {
+            return;
+        }
+
+        const auto& atom_rings = ring_info->atomRings();
+        rings_.reserve(atom_rings.size());
+        for (const auto& atom_ring : atom_rings) {
+            Ring_Record ring;
+            ring.atoms.reserve(atom_ring.size());
+            ring.adjacency_list.reserve(atom_ring.size());
+            for (const auto atom : atom_ring) {
+                ring.atoms.push_back(static_cast<std::size_t>(atom));
+            }
+
+            for (std::size_t i = 0; i < ring.atoms.size(); ++i) {
+                Ring_Atom_Adjacency adjacency;
+                adjacency.atom = ring.atoms[i];
+                if (ring.atoms.size() > 1) {
+                    adjacency.adjacent_atoms.push_back(ring.atoms[(i + ring.atoms.size() - 1) % ring.atoms.size()]);
+                    adjacency.adjacent_atoms.push_back(ring.atoms[(i + 1) % ring.atoms.size()]);
+                }
+                ring.adjacency_list.push_back(std::move(adjacency));
+            }
+
+            rings_.push_back(std::move(ring));
+        }
+    }
+
 private:
     static void validate_mapping_result(
         const RmsdMatch& match,
@@ -596,6 +647,7 @@ private:
     }
 
     std::vector<Conformer_Record> records_;
+    std::vector<Ring_Record> rings_;
 };
 
 #ifndef CONFORMER_TOOLKIT_NO_MAIN
@@ -608,7 +660,7 @@ static void usage(const char* program) {
               << "--xyz-dir loads all .xyz files under a directory, sorted by path.\n"
               << "--multi-xyz loads multiple XYZ records from one concatenated XYZ file.\n"
               << "By default all conformers must have the same atom symbols in the same order.\n"
-              << "--allow-reorder runs Conformer_Batch::index_cleanup before duplicate removal.\n";
+              << "--allow-reorder runs Conformer_Group::index_cleanup before duplicate removal.\n";
 }
 
 int main(int argc, char** argv) {
@@ -713,14 +765,14 @@ int main(int argc, char** argv) {
             throw std::runtime_error("--bond-scale must be greater than zero");
         }
 
-        Conformer_Batch batch = [&]() {
+        Conformer_Group batch = [&]() {
             if (!xyz_dir.empty()) {
-                return Conformer_Batch::from_xyz_directory(xyz_dir);
+                return Conformer_Group::from_xyz_directory(xyz_dir);
             }
             if (!multi_xyz.empty()) {
-                return Conformer_Batch::from_multi_xyz(multi_xyz);
+                return Conformer_Group::from_multi_xyz(multi_xyz);
             }
-            return Conformer_Batch::from_xyz_files(paths);
+            return Conformer_Group::from_xyz_files(paths);
         }();
 
         const auto start = std::chrono::steady_clock::now();
@@ -731,9 +783,9 @@ int main(int argc, char** argv) {
             }
             batch.write_records(write_cleaned_dir, "cleaned");
         }
-        const Conformer_Batch::Remove_Duplicates_Result result =
+        const Conformer_Group::Remove_Duplicates_Result result =
             index_cleanup_only
-                ? Conformer_Batch::Remove_Duplicates_Result{}
+                ? Conformer_Group::Remove_Duplicates_Result{}
                 : batch.remove_duplicates(tolerance, allow_reorder, max_mappings, bond_scale, ambiguity_gap, charge);
         const auto stop = std::chrono::steady_clock::now();
         const std::chrono::duration<double> elapsed = stop - start;

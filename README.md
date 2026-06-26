@@ -96,6 +96,28 @@ cmake -S . -B build \
 cmake --build build --parallel
 ```
 
+On Debian 13 arm64, the RDKit and pybind11 packages can also be kept entirely under this repository:
+
+```bash
+mkdir -p third_party/debs third_party/deb-root
+cd third_party/debs
+apt-get download \
+  librdkit-dev librdkit1t64 pybind11-dev \
+  libboost-dev libboost1.83-dev \
+  libboost-python1.83.0 libboost-serialization1.83.0 \
+  libcoordgen3 libinchi1.07 libmaeparser1
+for pkg in *.deb; do dpkg-deb -x "$pkg" ../deb-root; done
+cd ../..
+git clone --depth 1 --branch Release_2025_03_1 \
+  https://github.com/rdkit/rdkit.git third_party/rdkit-source
+cmake -S . -B build \
+  -DRDKIT_ROOT="$PWD/third_party/deb-root/usr" \
+  -DRDKIT_SOURCE_ROOT="$PWD/third_party/rdkit-source" \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+```
+
 For a non-system RDKit installation, set `RDKIT_ROOT` to its prefix. The helper builds the Python extension through the same CMake configuration:
 
 ```bash
@@ -106,7 +128,11 @@ python3 src/build_pybind.py \
 
 ## Usage
 
-The C++ batch tool is built around a `Conformer_Batch` class. It can load conformers from explicit XYZ file paths, all `.xyz` files under a directory, or a concatenated multi-XYZ file. The class exposes `index_cleanup` for atom-order normalization and `remove_duplicates`, which can optionally run `index_cleanup` before RMSD deduplication.
+The Python extension exposes one C++ container:
+
+- `Conformer_Group` stores all conformers for one molecule. It loads conformers from explicit XYZ file paths, all `.xyz` files under a directory, or a concatenated multi-XYZ file. It exposes `index_cleanup` for atom-order normalization, `remove_duplicates` for RMSD deduplication, and `detect_rings` for RDKit-derived ring information.
+
+`Conformer_Batch` remains available as a Python compatibility alias for `Conformer_Group`.
 
 ### Python Interface
 
@@ -117,9 +143,9 @@ PYTHONPATH=src python3
 ```
 
 ```python
-from conformer_toolkit_cpp import Conformer_Batch
+from conformer_toolkit_cpp import Conformer_Group
 
-batch = Conformer_Batch.from_xyz_files([
+batch = Conformer_Group.from_xyz_files([
     "conf_001.xyz",
     "conf_002.xyz",
 ])
@@ -138,9 +164,34 @@ for duplicate in result.duplicates:
 Other loaders:
 
 ```python
-batch = Conformer_Batch.from_xyz_directory("conformer_dir")
-batch = Conformer_Batch.from_multi_xyz("conformers.xyz")
+batch = Conformer_Group.from_xyz_directory("conformer_dir")
+batch = Conformer_Group.from_multi_xyz("conformers.xyz")
 ```
+
+### Ring Detection
+
+Use the same `Conformer_Group` instance when you want to keep all conformers together and store ring metadata for the molecule:
+
+```python
+from conformer_toolkit_cpp import Conformer_Group
+
+group = Conformer_Group.from_xyz_files([
+    "benzene_conf_001.xyz",
+    "benzene_conf_002.xyz",
+])
+group.detect_rings(charge=0)
+
+print(len(group), len(group.rings()))
+for ring in group.rings():
+    print("ring atoms:", list(ring.atoms))
+    for atom_adjacency in ring.adjacency_list:
+        print(atom_adjacency.atom, list(atom_adjacency.adjacent_atoms))
+```
+
+`detect_rings` infers chemistry from the first conformer with RDKit `RingInfo`. Each stored `Ring_Record` contains:
+
+- `atoms`: RDKit's ordered atom indices for the ring.
+- `adjacency_list`: one `Ring_Atom_Adjacency` per ring atom, where `atom` is the atom index and `adjacent_atoms` contains its previous and next ring neighbors.
 
 Run index cleanup on its own:
 
@@ -197,7 +248,7 @@ Default behavior requires the same atom symbols in the same order for every inpu
 src/conformer_deduplicate --allow-reorder --tolerance 0.001 conformer_*.xyz
 ```
 
-`--allow-reorder` calls `Conformer_Batch::remove_duplicates` with its cleanup option enabled, so atom indexing is normalized before duplicate removal.
+`--allow-reorder` calls `Conformer_Group::remove_duplicates` with its cleanup option enabled, so atom indexing is normalized before duplicate removal.
 
 Run index cleanup on its own and write reordered XYZ files:
 

@@ -2,6 +2,7 @@
 .venv/
 .deps/
 build/
+third_party/
 venv/
 env/
 conformer_toolkit/
