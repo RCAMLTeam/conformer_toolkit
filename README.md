@@ -198,7 +198,9 @@ batch = Conformer_Group.from_multi_xyz("conformers.xyz")
 ```
 
 XYZ comment fields can be parsed into per-conformer string properties by passing
-a template. Energy operations convert the selected property to a number:
+a template. Placeholder names beginning with `_` are matched but omitted from
+the stored properties, which is useful for fields such as `{_framenumber}`.
+Energy operations convert the selected property to a number:
 
 ```python
 def load_group():
@@ -209,6 +211,13 @@ def load_group():
 
 group = load_group()
 print(group.records()[0].properties["frame"])
+
+# Match the frame field without retaining it as a property.
+energy_only_group = Conformer_Group.from_multi_xyz(
+    "conformers.xyz",
+    comment_template="frame = {_framenumber} energy = {energy}",
+)
+print(energy_only_group.records()[0].properties)  # {"energy": "..."}
 
 group = load_group()
 group.sort_by_energy()                         # ascending; stable for ties

@@ -13,6 +13,12 @@ def load():
 
 group = load()
 assert group.records()[0].properties == {"frame": "0", "energy": "3.0"}
+
+placeholder_group = Conformer_Group.from_multi_xyz(
+    str(PATH), comment_template="frame = {_framenumber} energy = {energy}"
+)
+assert placeholder_group.records()[0].properties == {"energy": "3.0"}
+
 group.sort_by_energy()
 assert [record.properties["frame"] for record in group.records()] == ["1", "3", "2", "0"]
 

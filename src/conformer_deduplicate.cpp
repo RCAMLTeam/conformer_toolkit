@@ -88,7 +88,12 @@ static std::unordered_map<std::string, std::string> parse_comment_properties(
         throw std::runtime_error("XYZ comment does not match template: " + comment);
     }
     for (std::size_t i = 0; i < names.size(); ++i) {
-        properties.emplace(names[i], match[i + 1].str());
+        // A leading underscore marks a template-only placeholder. It still
+        // participates in matching, but is intentionally not exposed as a
+        // conformer property.
+        if (names[i].front() != '_') {
+            properties.emplace(names[i], match[i + 1].str());
+        }
     }
     return properties;
 }
