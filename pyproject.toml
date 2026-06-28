@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "conformer-toolkit"
+version = "0.1.0"
+description = "Utilities for comparing and deduplicating molecular conformers"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.23",
+    "rdkit>=2022.9",
+]
+
+[project.scripts]
+conformer-deduplicate-sdf = "conformer_toolkit.deduplicate_rdkit:entrypoint"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["conformer_toolkit*"]
+

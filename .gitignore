@@ -6,7 +6,6 @@ build-pixi/
 third_party/
 venv/
 env/
-conformer_toolkit/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -23,6 +22,7 @@ src/conformer_deduplicate
 *.dylib
 *.dll
 *.exe
+*.egg-info/
 
 # Generated benchmark and run outputs
 src/benchmark_data/

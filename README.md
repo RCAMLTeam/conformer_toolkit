@@ -20,8 +20,8 @@ executables and the optional Python extension to `src/`.
     ├── conformer_deduplicate.cpp
     ├── conformer_identical.cpp
     ├── conformer_toolkit_bindings.cpp
-    ├── deduplicate_rdkit.py
-    ├── knn_k_optimizer.py
+    ├── conformer_toolkit/
+    │   └── deduplicate_rdkit.py
     └── testdata/
 ```
 
@@ -71,11 +71,17 @@ For each molecule, the script:
 
 This remains available when SDF/MOL inputs already carry explicit connectivity.
 
-### KNN K Optimization
-
-`knn_k_optimizer.py` selects K for a conformer KNN graph from a precomputed NumPy RMSD matrix. It builds undirected one-way or mutual KNN graphs, tests K from `2` to `min(N - 1, 50)`, and uses Union-Find to return the smallest K that yields a connected graph. Each tested K records connectivity, component count, edge count, average edge RMSD, and Strategy 4 scoring inputs.
-
 ## Build
+
+Install the Python package from the repository checkout with:
+
+```bash
+python -m pip install .
+```
+
+This installs the RDKit SDF utilities and the
+`conformer-deduplicate-sdf` command. The C++ binaries and optional pybind11
+extension continue to use the CMake build described below.
 
 The recommended build path uses Pixi, which installs Python, NumPy, RDKit, RDKit C++ headers/libraries, pybind11, CMake, and the compiler toolchain from conda-forge:
 
@@ -228,38 +234,6 @@ Run index cleanup on its own:
 batch.index_cleanup(max_mappings=1_000_000, bond_scale=1.3, charge=0)
 batch.write_records("cleaned_xyz", "cleaned")
 ```
-
-### KNN Graph K Optimization
-
-Use `KNNKOptimizer` when you already have a precomputed `N x N` NumPy RMSD matrix and need the smallest K that produces a connected conformer graph:
-
-```python
-import numpy as np
-from knn_k_optimizer import KNNKOptimizer
-
-rmsd_matrix = np.load("conformer_rmsd.npy")
-optimizer = KNNKOptimizer(rmsd_matrix)
-
-result = optimizer.optimize()
-print(result.optimal_k, result.connected)
-print(result.edge_count, result.avg_edge_weight)
-
-graph = optimizer.build_graph(result.optimal_k)
-print(graph.edges)
-
-for diagnostic in result.diagnostics:
-    print(
-        diagnostic.k,
-        diagnostic.connected,
-        diagnostic.n_components,
-        diagnostic.edge_count,
-        diagnostic.avg_edge_weight,
-    )
-```
-
-By default, an undirected edge is added when either conformer selects the other among its K nearest neighbors. Pass `edge_mode="mutual"` to require reciprocal neighbor selection. The optimizer tests K from `2` to `min(N - 1, 50)` and uses Union-Find for connectivity checks.
-
-`KDiagnostic` also includes `connectivity_score` and `stability_score`, and `KNNKOptimizer.strategy4_score(...)` is provided as a future Strategy 4 hook where alpha should dominate connectivity, beta penalizes average RMSD, and gamma rewards neighbor-set stability.
 
 ### Compare Two Ordered XYZ Conformers
 
