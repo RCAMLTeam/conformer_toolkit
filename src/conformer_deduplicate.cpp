@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
@@ -8,9 +9,11 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <GraphMol/DetermineBonds/DetermineBonds.h>
@@ -36,8 +39,80 @@ struct Conformer_Record {
     std::size_t input_index{};
     std::string source;
     std::string comment;
+    std::unordered_map<std::string, std::string> properties;
     Molecule mol;
 };
+
+static std::string regex_escape(const std::string& text) {
+    static const std::regex special(R"([.^$|()\[\]{}*+?\\])");
+    return std::regex_replace(text, special, R"(\$&)");
+}
+
+static std::unordered_map<std::string, std::string> parse_comment_properties(
+    const std::string& comment,
+    const std::string& comment_template
+) {
+    std::unordered_map<std::string, std::string> properties;
+    if (comment_template.empty()) {
+        return properties;
+    }
+
+    std::vector<std::string> names;
+    std::string pattern = "^";
+    std::size_t cursor = 0;
+    while (cursor < comment_template.size()) {
+        const std::size_t open = comment_template.find('{', cursor);
+        if (open == std::string::npos) {
+            pattern += regex_escape(comment_template.substr(cursor));
+            cursor = comment_template.size();
+            break;
+        }
+        pattern += regex_escape(comment_template.substr(cursor, open - cursor));
+        const std::size_t close = comment_template.find('}', open + 1);
+        if (close == std::string::npos) {
+            throw std::invalid_argument("Unclosed property placeholder in comment template");
+        }
+        const std::string name = comment_template.substr(open + 1, close - open - 1);
+        if (name.empty() || properties.count(name) != 0 ||
+            std::find(names.begin(), names.end(), name) != names.end()) {
+            throw std::invalid_argument("Comment template property names must be non-empty and unique");
+        }
+        names.push_back(name);
+        pattern += "(.*?)";
+        cursor = close + 1;
+    }
+    pattern += "$";
+
+    std::smatch match;
+    if (!std::regex_match(comment, match, std::regex(pattern))) {
+        throw std::runtime_error("XYZ comment does not match template: " + comment);
+    }
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        properties.emplace(names[i], match[i + 1].str());
+    }
+    return properties;
+}
+
+static double numeric_property(const Conformer_Record& record, const std::string& name) {
+    const auto found = record.properties.find(name);
+    if (found == record.properties.end()) {
+        throw std::runtime_error("Conformer " + record.source + " has no property named '" + name + "'");
+    }
+    std::size_t consumed = 0;
+    double value = 0.0;
+    try {
+        value = std::stod(found->second, &consumed);
+    } catch (const std::exception&) {
+        throw std::runtime_error("Property '" + name + "' is not numeric in conformer " + record.source);
+    }
+    while (consumed < found->second.size() && std::isspace(static_cast<unsigned char>(found->second[consumed]))) {
+        ++consumed;
+    }
+    if (consumed != found->second.size() || !std::isfinite(value)) {
+        throw std::runtime_error("Property '" + name + "' is not a finite number in conformer " + record.source);
+    }
+    return value;
+}
 
 struct UniqueEntry {
     std::size_t input_index{};
@@ -319,7 +394,10 @@ public:
         std::vector<DuplicateEntry> duplicates;
     };
 
-    static Conformer_Group from_xyz_files(const std::vector<std::string>& paths) {
+    static Conformer_Group from_xyz_files(
+        const std::vector<std::string>& paths,
+        const std::string& comment_template = ""
+    ) {
         // Loader 1a: explicit single-XYZ files. Each file contributes one
         // conformer record and keeps its path as the source label.
         Conformer_Group batch;
@@ -333,12 +411,18 @@ public:
             if (!read_xyz_record(in, mol, comment)) {
                 throw std::runtime_error("Empty XYZ file: " + path);
             }
-            batch.records_.push_back({batch.records_.size(), path, comment, std::move(mol)});
+            batch.records_.push_back({
+                batch.records_.size(), path, comment,
+                parse_comment_properties(comment, comment_template), std::move(mol)
+            });
         }
         return batch;
     }
 
-    static Conformer_Group from_xyz_directory(const std::filesystem::path& directory) {
+    static Conformer_Group from_xyz_directory(
+        const std::filesystem::path& directory,
+        const std::string& comment_template = ""
+    ) {
         // Loader 1b: all .xyz files under a directory, sorted for reproducible
         // representative selection.
         if (!std::filesystem::is_directory(directory)) {
@@ -358,10 +442,13 @@ public:
         if (paths.empty()) {
             throw std::runtime_error("No .xyz files found under directory: " + directory.string());
         }
-        return from_xyz_files(paths);
+        return from_xyz_files(paths, comment_template);
     }
 
-    static Conformer_Group from_multi_xyz(const std::filesystem::path& path) {
+    static Conformer_Group from_multi_xyz(
+        const std::filesystem::path& path,
+        const std::string& comment_template = ""
+    ) {
         // Loader 2: concatenated multi-XYZ. Source labels use file#record_index
         // so duplicate reports can point back to the original record.
         std::ifstream in(path);
@@ -378,7 +465,10 @@ public:
             }
             std::ostringstream source;
             source << path.string() << "#" << batch.records_.size();
-            batch.records_.push_back({batch.records_.size(), source.str(), comment, std::move(mol)});
+            batch.records_.push_back({
+                batch.records_.size(), source.str(), comment,
+                parse_comment_properties(comment, comment_template), std::move(mol)
+            });
         }
         if (batch.records_.empty()) {
             throw std::runtime_error("No XYZ records found in multi-XYZ file: " + path.string());
@@ -400,6 +490,70 @@ public:
 
     const std::vector<std::vector<std::size_t>>& adjacency_table() const {
         return adjacency_table_;
+    }
+
+    void sort_by_energy(const std::string& energy_property = "energy") {
+        // stable_sort preserves input order for conformers with equal energy.
+        std::stable_sort(records_.begin(), records_.end(), [&](const auto& a, const auto& b) {
+            return numeric_property(a, energy_property) < numeric_property(b, energy_property);
+        });
+    }
+
+    void filter_by_maximum_energy(double maximum_energy, const std::string& energy_property = "energy") {
+        if (!std::isfinite(maximum_energy)) {
+            throw std::invalid_argument("maximum_energy must be finite");
+        }
+        records_.erase(
+            std::remove_if(records_.begin(), records_.end(), [&](const auto& record) {
+                return numeric_property(record, energy_property) > maximum_energy;
+            }),
+            records_.end()
+        );
+    }
+
+    void retain_lowest_energy_percent(double percent, const std::string& energy_property = "energy") {
+        if (!std::isfinite(percent) || percent < 0.0 || percent > 100.0) {
+            throw std::invalid_argument("percent must be between 0 and 100 inclusive");
+        }
+        sort_by_energy(energy_property);
+        const std::size_t keep = static_cast<std::size_t>(
+            std::ceil(static_cast<double>(records_.size()) * percent / 100.0)
+        );
+        records_.resize(keep);
+    }
+
+    void filter_by_boltzmann_population_ratio(
+        double minimum_ratio,
+        double temperature_kelvin = 298.15,
+        const std::string& energy_property = "energy",
+        double energy_to_joules_per_mole = 1000.0
+    ) {
+        if (!std::isfinite(minimum_ratio) || minimum_ratio < 0.0 || minimum_ratio > 1.0) {
+            throw std::invalid_argument("minimum_ratio must be between 0 and 1 inclusive");
+        }
+        if (!std::isfinite(temperature_kelvin) || temperature_kelvin <= 0.0) {
+            throw std::invalid_argument("temperature_kelvin must be positive");
+        }
+        if (!std::isfinite(energy_to_joules_per_mole) || energy_to_joules_per_mole <= 0.0) {
+            throw std::invalid_argument("energy_to_joules_per_mole must be positive");
+        }
+        if (records_.empty()) {
+            return;
+        }
+        double minimum_energy = std::numeric_limits<double>::infinity();
+        for (const auto& record : records_) {
+            minimum_energy = std::min(minimum_energy, numeric_property(record, energy_property));
+        }
+        constexpr double gas_constant = 8.31446261815324; // J mol^-1 K^-1
+        records_.erase(
+            std::remove_if(records_.begin(), records_.end(), [&](const auto& record) {
+                const double delta_j_per_mol =
+                    (numeric_property(record, energy_property) - minimum_energy) * energy_to_joules_per_mole;
+                const double ratio = std::exp(-delta_j_per_mol / (gas_constant * temperature_kelvin));
+                return ratio < minimum_ratio;
+            }),
+            records_.end()
+        );
     }
 
     void index_cleanup(std::size_t max_mappings, double bond_scale, double ambiguity_gap, int charge = 0) {

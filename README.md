@@ -197,6 +197,30 @@ batch = Conformer_Group.from_xyz_directory("conformer_dir")
 batch = Conformer_Group.from_multi_xyz("conformers.xyz")
 ```
 
+XYZ comment fields can be parsed into per-conformer string properties by passing
+a template. Energy operations convert the selected property to a number:
+
+```python
+group = Conformer_Group.from_multi_xyz(
+    "conformers.xyz",
+    comment_template="frame = {frame} energy = {energy}",
+)
+
+print(group.records()[0].properties["frame"])
+group.sort_by_energy()                         # ascending, stable
+group.filter_by_maximum_energy(10.0)           # inclusive upper limit
+group.retain_lowest_energy_percent(25.0)       # percentage in [0, 100]
+group.filter_by_boltzmann_population_ratio(
+    minimum_ratio=0.01,
+    temperature_kelvin=298.15,
+    energy_to_joules_per_mole=1000.0,          # default assumes kJ/mol
+)
+```
+
+Each filtering method changes the group in place. The Boltzmann population ratio
+is `exp(-(E - E_min) / RT)` and is therefore relative to the lowest-energy
+conformer; `energy_to_joules_per_mole` allows energies in other units.
+
 ### Ring Detection
 
 Use the same `Conformer_Group` instance when you want to keep all conformers together and store ring metadata for the molecule:

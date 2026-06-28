@@ -24,6 +24,7 @@ PYBIND11_MODULE(conformer_toolkit_cpp, m) {
         .def_readonly("input_index", &Conformer_Record::input_index)
         .def_readonly("source", &Conformer_Record::source)
         .def_readonly("comment", &Conformer_Record::comment)
+        .def_readonly("properties", &Conformer_Record::properties)
         .def_readonly("mol", &Conformer_Record::mol);
 
     py::class_<UniqueEntry>(m, "UniqueEntry")
@@ -67,26 +68,42 @@ PYBIND11_MODULE(conformer_toolkit_cpp, m) {
             "from_xyz_files",
             &Conformer_Group::from_xyz_files,
             py::arg("paths"),
+            py::arg("comment_template") = "",
             "Load one conformer from each XYZ file path."
         )
         .def_static(
             "from_xyz_directory",
-            [](const std::string& directory) {
-                return Conformer_Group::from_xyz_directory(directory);
+            [](const std::string& directory, const std::string& comment_template) {
+                return Conformer_Group::from_xyz_directory(directory, comment_template);
             },
             py::arg("directory"),
+            py::arg("comment_template") = "",
             "Load all .xyz files in a directory, sorted by path."
         )
         .def_static(
             "from_multi_xyz",
-            [](const std::string& path) {
-                return Conformer_Group::from_multi_xyz(path);
+            [](const std::string& path, const std::string& comment_template) {
+                return Conformer_Group::from_multi_xyz(path, comment_template);
             },
             py::arg("path"),
+            py::arg("comment_template") = "",
             "Load conformers from a concatenated multi-XYZ file."
         )
         .def("size", &Conformer_Group::size)
         .def("__len__", &Conformer_Group::size)
+        .def("sort_by_energy", &Conformer_Group::sort_by_energy,
+            py::arg("energy_property") = "energy",
+            "Sort conformers in place from lowest to highest energy (stable for ties).")
+        .def("filter_by_maximum_energy", &Conformer_Group::filter_by_maximum_energy,
+            py::arg("maximum_energy"), py::arg("energy_property") = "energy",
+            "Keep conformers whose energy is less than or equal to maximum_energy.")
+        .def("retain_lowest_energy_percent", &Conformer_Group::retain_lowest_energy_percent,
+            py::arg("percent"), py::arg("energy_property") = "energy",
+            "Sort by energy and retain ceil(size * percent / 100) conformers.")
+        .def("filter_by_boltzmann_population_ratio", &Conformer_Group::filter_by_boltzmann_population_ratio,
+            py::arg("minimum_ratio"), py::arg("temperature_kelvin") = 298.15,
+            py::arg("energy_property") = "energy", py::arg("energy_to_joules_per_mole") = 1000.0,
+            "Keep conformers with Boltzmann population at least minimum_ratio times that of the energy minimum.")
         .def(
             "records",
             &Conformer_Group::records,

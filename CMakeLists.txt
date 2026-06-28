@@ -149,6 +149,11 @@ if(TARGET conformer_toolkit_cpp)
     set_target_properties(conformer_toolkit_cpp PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/src"
     )
+    add_test(
+        NAME conformer_python_api
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONPATH=${CMAKE_SOURCE_DIR}/src"
+            "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/src/test_python_api.py"
+    )
 endif()
 
 enable_testing()
