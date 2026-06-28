@@ -23,6 +23,8 @@ src/conformer_deduplicate
 *.dll
 *.exe
 *.egg-info/
+dist/
+wheelhouse/
 
 # Generated benchmark and run outputs
 src/benchmark_data/

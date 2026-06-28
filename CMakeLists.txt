@@ -115,6 +115,12 @@ add_executable(
 configure_conformer_target(conformer_identical)
 
 option(BUILD_PYTHON_BINDINGS "Build the pybind11 extension" ON)
+set(
+    CONFORMER_PYTHON_OUTPUT_DIRECTORY
+    "${CMAKE_SOURCE_DIR}/src/conformer_toolkit"
+    CACHE PATH
+    "Output directory for the Python extension"
+)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 if(BUILD_PYTHON_BINDINGS)
     find_package(Python3 COMPONENTS Development.Module REQUIRED)
@@ -147,7 +153,8 @@ set_target_properties(conformer_deduplicate conformer_identical PROPERTIES
 )
 if(TARGET conformer_toolkit_cpp)
     set_target_properties(conformer_toolkit_cpp PROPERTIES
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/src"
+        LIBRARY_OUTPUT_DIRECTORY "${CONFORMER_PYTHON_OUTPUT_DIRECTORY}"
+        OUTPUT_NAME "_native"
     )
     add_test(
         NAME conformer_python_api

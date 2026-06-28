@@ -71,17 +71,88 @@ For each molecule, the script:
 
 This remains available when SDF/MOL inputs already carry explicit connectivity.
 
-## Build
+## Installation
 
-Install the Python package from the repository checkout with:
+After publication, install the package from PyPI with:
 
 ```bash
-python -m pip install .
+python -m pip install spivey_conformer_toolkit
 ```
 
-This installs the RDKit SDF utilities and the
-`conformer-deduplicate-sdf` command. The C++ binaries and optional pybind11
-extension continue to use the CMake build described below.
+The package contains a C++ extension and must be built against an RDKit
+installation that provides its C++ headers and libraries. The Python-only
+`rdkit` wheel is not sufficient. A C++20 compiler and CMake 3.18 or newer are
+also required.
+
+The recommended installation uses the repository's Pixi environment, which
+provides all native dependencies:
+
+```bash
+git clone <repository-url> conformer_toolkit
+cd conformer_toolkit
+pixi install
+pixi run python -m pip install .
+```
+
+Verify the installed extension and command:
+
+```bash
+pixi run python -c "from conformer_toolkit import Conformer_Group"
+pixi run conformer-deduplicate-sdf --help
+```
+
+For an existing environment with RDKit development files, set `RDKIT_ROOT` to
+that environment's prefix if it is not the active Python prefix:
+
+```bash
+RDKIT_ROOT=/path/to/rdkit-prefix python -m pip install .
+```
+
+If that RDKit installation omits `DetermineBonds`, also set
+`RDKIT_SOURCE_ROOT` to a matching RDKit source checkout. Installation includes
+the `conformer_toolkit` Python package and native extension, plus the
+`conformer-deduplicate-sdf` command.
+
+### Publishing to PyPI
+
+Build and validate both distribution formats in the Pixi environment:
+
+```bash
+rm -rf dist wheelhouse
+pixi run python -m pip install auditwheel build patchelf twine
+pixi run python -m build
+pixi run python -m auditwheel repair --wheel-dir wheelhouse dist/*-linux_*.whl
+pixi run python -m twine check dist/*.tar.gz wheelhouse/*.whl
+```
+
+The unrepaired `linux_*` wheel in `dist/` is a local build artifact and must not
+be uploaded. `auditwheel` copies its native dependencies into a wheel under
+`wheelhouse/` and assigns an appropriate `manylinux` compatibility tag. Build
+on the oldest manylinux image you intend to support; building on a newer Linux
+distribution produces a wheel that requires a newer glibc.
+
+Test the release against TestPyPI before the final upload:
+
+```bash
+pixi run python -m twine upload --repository testpypi \
+  dist/*.tar.gz wheelhouse/*.whl
+python -m pip install --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ spivey_conformer_toolkit
+```
+
+Publish the immutable version to PyPI only after the TestPyPI installation has
+been verified:
+
+```bash
+pixi run python -m twine upload dist/*.tar.gz wheelhouse/*.whl
+```
+
+Use a PyPI API token when Twine prompts for credentials: `__token__` is the
+username and the complete token (including its `pypi-` prefix) is the password.
+PyPI normalizes the distribution name to `spivey-conformer-toolkit`; both dash
+and underscore spellings work with `pip`.
+
+## Development Build
 
 The recommended build path uses Pixi, which installs Python, NumPy, RDKit, RDKit C++ headers/libraries, pybind11, CMake, and the compiler toolchain from conda-forge:
 
@@ -112,7 +183,8 @@ ctest --test-dir build --output-on-failure
 
 After a successful build, the command-line tools are available as
 `src/conformer_identical` and `src/conformer_deduplicate`. If Python bindings
-are enabled, the `conformer_toolkit_cpp` extension is also written to `src/`.
+are enabled, the private `_native` extension is written under
+`src/conformer_toolkit/`.
 
 Some packaged RDKit builds, including Debian's, omit the `DetermineBonds` library and header. Use a matching RDKit source checkout in that case:
 
@@ -172,7 +244,7 @@ PYTHONPATH=src python3
 ```
 
 ```python
-from conformer_toolkit_cpp import Conformer_Group
+from conformer_toolkit import Conformer_Group
 
 batch = Conformer_Group.from_xyz_files([
     "conf_001.xyz",
@@ -247,7 +319,7 @@ conformer. The default conversion assumes energies are in kJ/mol; use
 Use the same `Conformer_Group` instance when you want to keep all conformers together and store ring metadata for the molecule:
 
 ```python
-from conformer_toolkit_cpp import Conformer_Group
+from conformer_toolkit import Conformer_Group
 
 group = Conformer_Group.from_xyz_files([
     "benzene_conf_001.xyz",

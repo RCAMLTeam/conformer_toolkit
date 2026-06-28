@@ -6,7 +6,7 @@
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(conformer_toolkit_cpp, m) {
+PYBIND11_MODULE(_native, m) {
     m.doc() = "pybind11 interface for C++ conformer deduplication and molecule ring analysis";
 
     py::class_<Vec3>(m, "Vec3")

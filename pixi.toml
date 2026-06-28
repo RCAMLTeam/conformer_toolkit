@@ -9,7 +9,7 @@ version = "0.1.0"
 configure = "cmake -S . -B build-pixi -DCMAKE_BUILD_TYPE=Release -DRDKIT_ROOT=$CONDA_PREFIX"
 build = { cmd = "cmake --build build-pixi --parallel", depends-on = ["configure"] }
 test = { cmd = "ctest --test-dir build-pixi --output-on-failure", depends-on = ["build"] }
-python-smoke = "PYTHONPATH=src python -c \"from conformer_toolkit_cpp import Conformer_Group; group = Conformer_Group.from_xyz_files(['src/testdata/benzene_ordered.xyz']); group.detect_rings(); assert len(group.rings()) == 1; print('python smoke passed')\""
+python-smoke = "PYTHONPATH=src python -c \"from conformer_toolkit import Conformer_Group; group = Conformer_Group.from_xyz_files(['src/testdata/benzene_ordered.xyz']); group.detect_rings(); assert len(group.rings()) == 1; print('python smoke passed')\""
 smoke = { depends-on = ["test", "python-smoke"] }
 
 [dependencies]
@@ -27,4 +27,4 @@ ipykernel = ">=7.3.0,<8"
 notebook = ">=7.6.0,<8"
 
 [pypi-dependencies]
-conformer-toolkit = { path = ".", editable = true }
+spivey-conformer-toolkit = { path = ".", editable = true }

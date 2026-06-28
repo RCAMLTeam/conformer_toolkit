@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from conformer_toolkit_cpp import Conformer_Group
+from conformer_toolkit import Conformer_Group
 
 
 PATH = Path(__file__).parent / "testdata" / "h2_energies.xyz"

@@ -1,13 +1,25 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "conformer-toolkit"
+name = "spivey_conformer_toolkit"
 version = "0.1.0"
 description = "Utilities for comparing and deduplicating molecular conformers"
 readme = "README.md"
 requires-python = ">=3.10"
+authors = [
+    { name = "AlanHe", email = "he494165@gmail.com" },
+]
+keywords = ["chemistry", "conformer", "rdkit", "rmsd"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
 dependencies = [
     "numpy>=1.23",
     "rdkit>=2022.9",
@@ -19,4 +31,3 @@ conformer-deduplicate-sdf = "conformer_toolkit.deduplicate_rdkit:entrypoint"
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["conformer_toolkit*"]
-
