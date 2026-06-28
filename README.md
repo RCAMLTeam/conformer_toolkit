@@ -201,15 +201,25 @@ XYZ comment fields can be parsed into per-conformer string properties by passing
 a template. Energy operations convert the selected property to a number:
 
 ```python
-group = Conformer_Group.from_multi_xyz(
-    "conformers.xyz",
-    comment_template="frame = {frame} energy = {energy}",
-)
+def load_group():
+    return Conformer_Group.from_multi_xyz(
+        "conformers.xyz",
+        comment_template="frame = {frame} energy = {energy}",
+    )
 
+group = load_group()
 print(group.records()[0].properties["frame"])
-group.sort_by_energy()                         # ascending, stable
+
+group = load_group()
+group.sort_by_energy()                         # ascending; stable for ties
+
+group = load_group()
 group.filter_by_maximum_energy(10.0)           # inclusive upper limit
-group.retain_lowest_energy_percent(25.0)       # percentage in [0, 100]
+
+group = load_group()
+group.retain_lowest_energy_percent(25.0)       # ceil(N * 25 / 100) records
+
+group = load_group()
 group.filter_by_boltzmann_population_ratio(
     minimum_ratio=0.01,
     temperature_kelvin=298.15,
@@ -219,7 +229,9 @@ group.filter_by_boltzmann_population_ratio(
 
 Each filtering method changes the group in place. The Boltzmann population ratio
 is `exp(-(E - E_min) / RT)` and is therefore relative to the lowest-energy
-conformer; `energy_to_joules_per_mole` allows energies in other units.
+conformer. The default conversion assumes energies are in kJ/mol; use
+`energy_to_joules_per_mole=1.0` for J/mol. All methods accept
+`energy_property="another_field"` when the template uses a different name.
 
 ### Ring Detection
 

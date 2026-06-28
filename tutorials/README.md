@@ -13,5 +13,5 @@ If you open a notebook directly from `tutorials/`, its setup cell still locates 
 
 ## Notebooks
 
-- `01_cpp_python_interface.ipynb`: load XYZ conformers with `Conformer_Group`, remove duplicates, normalize atom indices, write cleaned XYZ files, and detect rings.
+- `01_cpp_python_interface.ipynb`: load XYZ conformers with `Conformer_Group`, parse comment metadata, select conformers by energy and Boltzmann population, remove duplicates, normalize atom indices, write cleaned XYZ files, and detect rings.
 - `03_rdkit_sdf_deduplication.ipynb`: use the RDKit SDF helper functions and command-line script for graph-aware SDF deduplication.
